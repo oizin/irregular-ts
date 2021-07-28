@@ -1,0 +1,7 @@
+experiments/
+data/
+data/raw*
+.Rproj.user/
+glucose-insulin-mimic.Rproj
+.ipynb_checkpoints
+__pycache__/

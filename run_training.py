@@ -4,10 +4,10 @@
 #
 ########################################################################
 
-from src.data.data_loader import MIMICDataset,import_data
+from src.data.data_loader import MIMICDataset,import_data,collate_fn_padd
 from src.utils import setup_logger
 from src.training.training_nn import *
-from src.models.models import ODERNN,LatentODE1,LatentODE2,NeuralODE
+from src.models.models import ODERNN,LatentODE1,LatentODE2,NeuralODE,ODEGRU,ODELSTM,LSTM
 from src.utils import seed_everything
 from src.data.data_scaler import PreProcess
 from data.feature_sets import all_features
@@ -37,7 +37,7 @@ from sklearn.model_selection import train_test_split
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--nepochs', type=int, default=5,help='Maximum number of epochs to train a model.')
-parser.add_argument('--net', dest='net', choices=['ODERNN','LatentODE1','LatentODE2','NeuralODE'], default='NeuralODE',
+parser.add_argument('--net', dest='net', choices=['ODERNN','ODEGRU','ODELSTM','LSTM','LatentODE1','LatentODE2','NeuralODE'], default='NeuralODE',
                     help='Network architecture to use (see src/models/model.py)')
 parser.add_argument('--hypertune', type=int, default=0,help='Perform hyperparameter tuning. 0=no, 1=yes.')
 parser.add_argument('--gpu', type=int, default=0,help='Use GPU if available. 0=no, 1=yes.')
@@ -55,7 +55,7 @@ HYPERTUNE = args.hypertune
 #FEATURE_DIM = 4
 OUTPUT_DIM = 1
 EARLY_STOPPING = 3
-nets = {'ODERNN': ODERNN,'LatentODE1':LatentODE1,'LatentODE2':LatentODE2,'NeuralODE':NeuralODE}
+nets = {'ODERNN': ODERNN,'ODEGRU': ODEGRU,'ODELSTM':ODELSTM,'LSTM':LSTM,'LatentODE1':LatentODE1,'LatentODE2':LatentODE2,'NeuralODE':NeuralODE}
 NET = nets[args.net]
 if args.gpu == 1 & torch.cuda.is_available():
     DEVICE = "cuda"
@@ -148,7 +148,7 @@ def objective(trial):
     log_train.info("model:\n:%s" % model)
 
     # fixed
-    optim_scheduler = optim.lr_scheduler.ReduceLROnPlateau(model_optim, 'min',patience=0,verbose=True)
+    optim_scheduler = optim.lr_scheduler.ReduceLROnPlateau(model_optim, 'min',patience=2,verbose=True)
 
     # train and evaluate
     dl_train = dataloaders['train']
@@ -159,7 +159,7 @@ def objective(trial):
 
     for epoch in range(N_EPOCHS):
         logging.info("EPOCH {}".format(epoch))
-        loss = model.train_single_epoch(dl_train,model_optim)
+        loss = model.train_single_epoch(dl_train,model_optim,epoch=epoch)
         loss_val,error_val,y_preds,y_vals,msks = model.evaluate(dataloaders["validation"])
         log_train.info("Validation loss {:05.4f}".format(loss_val))
         log_train.info("Validation RMSE {:05.4f}".format(error_val))
@@ -181,7 +181,6 @@ def objective(trial):
         if early_stop > EARLY_STOPPING:
             logging.info("Stopping early")
             break
-
     
         # Handle pruning based on the intermediate value.
         if trial.should_prune():
@@ -205,8 +204,9 @@ if __name__ == '__main__':
     """
     Train
     """
-    FEATURE_DIM = len(all_features())
     FEATURES = all_features()
+    #FEATURES = ['glc', 'input_short_injection', 'input_short_push', 'input_intermediate', 'input_long', 'input_hrs']
+    FEATURE_DIM = len(FEATURES)
     print(FEATURES)
     print(FEATURE_DIM)
 
@@ -219,8 +219,10 @@ if __name__ == '__main__':
     preproc.fit(df_train)
     df_train = preproc.transform(df_train)
     df_valid = preproc.transform(df_valid)
-    dl_train = DataLoader(MIMICDataset(df_train,FEATURES,pad=SEQUENCE_LEN),batch_size=BATCH_SIZE,shuffle=True)
-    dl_valid = DataLoader(MIMICDataset(df_valid,FEATURES,pad=SEQUENCE_LEN),batch_size=BATCH_SIZE)
+    dl_train = DataLoader(MIMICDataset(df_train,FEATURES,pad=SEQUENCE_LEN),
+                          batch_size=BATCH_SIZE,collate_fn=collate_fn_padd)
+    dl_valid = DataLoader(MIMICDataset(df_valid,FEATURES,pad=SEQUENCE_LEN),
+                          batch_size=BATCH_SIZE,collate_fn=collate_fn_padd)
     dataloaders = {'train':dl_train,'validation':dl_valid}
     print("training size:",df_train.shape)
     print("validation size:",df_valid.shape)
@@ -243,13 +245,13 @@ if __name__ == '__main__':
         l2_penalty = trial.params['l2_penalty']
         optimizer = trial.params['optimizer']
     else:
-        hidden_dim = 10
+        hidden_dim = 8
         dropout_p = 0.1
         # input_dim, hidden_dim, p, output_dim, device
         model = NET(FEATURE_DIM, hidden_dim, dropout_p, OUTPUT_DIM,BATCH_SIZE,DEVICE).to(DEVICE)
         lr = 1e-2
-        l2_penalty = 1e-4
-        optimizer = "RMSprop"
+        #l2_penalty = 1e-4
+        optimizer = "Adam"
 
     # record experiment
     log_train.info("feature_dim:%s" % FEATURE_DIM)
@@ -257,12 +259,12 @@ if __name__ == '__main__':
     log_train.info("dropout:\n:%s" % dropout_p)
     log_train.info("optimiser:\n:%s" % optimizer)
     log_train.info("lr:\n:%s" % lr)
-    log_train.info("l2_penalty:\n:%s" % l2_penalty)
+    #log_train.info("l2_penalty:\n:%s" % l2_penalty)
     log_train.info("model:\n:%s" % model)
 
     # train configuration
-    model_optim = getattr(optim, optimizer)(model.parameters(), lr=lr,weight_decay=l2_penalty)
-    optim_scheduler = optim.lr_scheduler.ReduceLROnPlateau(model_optim, 'min',patience=0,verbose=True)
+    model_optim = getattr(optim, optimizer)(model.parameters(), lr=lr)
+    optim_scheduler = optim.lr_scheduler.ReduceLROnPlateau(model_optim, 'min',patience=2,verbose=True)
 
     # train and evaluate
     best_state, best_val_loss,best_val_err = train_and_evaluate(model, dataloaders, 
@@ -273,7 +275,7 @@ if __name__ == '__main__':
         df_test = pd.read_csv('data/test.csv')
         df_test = preproc.transform(df_test)
         d_test = MIMICDataset(df_test,FEATURES,pad=SEQUENCE_LEN)  
-        dl_test = DataLoader(d_test,batch_size=BATCH_SIZE)
+        dl_test = DataLoader(d_test,batch_size=BATCH_SIZE,collate_fn=collate_fn_padd)
         loss_test,error_tests,y_preds,y_tests,msks = model.evaluate(dl_test)
         #example_plots(y_preds,y_tests,msks)
         #probabilistic_eval_plots(y_preds,y_tests,msks)

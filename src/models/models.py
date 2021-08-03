@@ -1,12 +1,13 @@
 import torch 
 import torch.nn as nn
 import torch.nn.functional as F
-#from torchdiffeq import odeint_adjoint as odeint
+from torchdiffeq import odeint_adjoint
 from torchdiffeq import odeint
 import math
 from tqdm import tqdm
+import numpy as np
 
-DT_SCALER = 1 / 100
+DT_SCALER = 1 / 24
 SEQUENCE_LENGTH = 100
 
 class Baseline(nn.Module):
@@ -22,21 +23,21 @@ class Baseline(nn.Module):
         self.p = p
         self.device = device
         
-    def train_single_epoch(self,dataloader,optim):
+    def train_single_epoch(self,dataloader,optim,epoch=0):
         """
         Method for model training
         """
         loss = 0.0
         n_batches = len(dataloader)
         print("number of batchs: {}".format(n_batches))
-        for i, (x, y, msk, dt, seqlen) in enumerate(dataloader):
+        for i, (x, y, msk, dt) in enumerate(dataloader):
             x = x.to(self.device)
             y = y.to(self.device)
             dt = dt.to(self.device)
             msk = msk.bool().to(self.device)
             optim.zero_grad()
-            preds = self.forward(dt,x).squeeze(2)
-            loss_step = self.loss_fn(preds,y,~msk.squeeze(0))
+            preds = self.forward(dt,x,epoch=epoch)
+            loss_step = self.loss_fn(preds,y,~msk.view(x.shape[0],-1))
             loss_step.backward()
             torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
             optim.step()
@@ -60,22 +61,22 @@ class Baseline(nn.Module):
         msks = []
         #dts = []
         with tqdm(total=len(dataloader)) as t:
-            for i, (x, y, msk, dt,seqlen) in enumerate(dataloader):
+            for i, (x, y, msk, dt) in enumerate(dataloader):
                 N += sum(sum(msk == 0)).item()
                 x = x.to(self.device)
                 y = y.to(self.device)
                 dt = dt.to(self.device)
                 # model prediction
-                y_ = self.forward(dt,x).squeeze(2)
+                y_ = self.forward(dt,x)
                 y_preds.append([yc.detach().cpu().numpy() for yc in y_]) 
                 y_tests.append(y.cpu().numpy())
                 msk = msk.bool().to(self.device)
-                rmse += self.get_sse(y_,y,~msk.squeeze(0)).item()
-                loss += self.loss_fn(y_,y,~msk.squeeze(0)).item()
+                rmse += self.get_sse(y_,y,~msk.view(x.shape[0],-1)).item()
+                loss += self.loss_fn(y_,y,~msk.view(x.shape[0],-1)).item()
                 msks.append(msk.cpu().numpy())
                 t.update()
         rmse /= N
-        loss /= (i + 1)
+        loss /= N
         rmse = math.sqrt(rmse)
         print("_rmse : {:05.3f}".format(rmse))
         print("_loss : {:05.3f}".format(loss))
@@ -87,9 +88,31 @@ class Baseline(nn.Module):
         """
         if type(y_) == tuple:
             y_ = y_[0]
+        y_ = y_.squeeze(2)
         c = torch.log(torch.tensor(140.0))
         rmse = torch.sum((torch.exp(y_[msk] + c) - torch.exp(y[msk] + c))**2)
         return rmse
+    
+    def predict(self,dataloader):
+        """
+        Predictions that drop masked and concatenate
+        """
+        mu_preds = []
+        sigma_preds = []
+        with tqdm(total=len(dataloader)) as t:
+            for i, (x, y, msk, dt) in enumerate(dataloader):
+                x = x.to(self.device)
+                dt = dt.to(self.device)
+                # model prediction
+                mu_,sig_ = self.forward(dt,x)
+                msk = msk.bool().to(self.device)
+                mu_preds.append((mu_.squeeze(2)[~msk.bool()]).detach().cpu().numpy())
+                sigma_preds.append((sig_.squeeze(2)[~msk.bool()]).detach().cpu().numpy())
+                t.update()
+        mu_preds = np.concatenate(mu_preds)
+        sigma_preds = np.concatenate(sigma_preds)
+        return mu_preds, sigma_preds
+
 
 #-------------------------------------------------------------------------------------------------
 
@@ -122,7 +145,7 @@ class NeuralODE_(nn.Module):
     def solve_ode(self, x0, t, x):
         self.x = x  # overwrites
         self.dt = t
-        outputs = odeint(self, x0, torch.tensor([0,1.0]).to(self.device),rtol=1e-3, atol=1e-3)[1]
+        outputs = odeint(self, x0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
         return outputs
     
 class NeuralODE(Baseline):
@@ -148,25 +171,32 @@ class NeuralODE(Baseline):
 
         return mu_out
     
+#     def loss_fn(self,mu_s_,y,msk):
+#         y_, s_ = mu_s_
+#         distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
+#         likelihood = distribution.log_prob(y[msk])
+#         return -torch.mean(likelihood)
+
     def loss_fn(self,y_,y,msk):
-        return torch.mean((y_[msk] - y[msk])**2)
+        return torch.sum((y_[msk] - y[msk])**2)
 
 #-------------------------------------------------------------------------------------------------
 
-class latentODE2_(nn.Module):
+
+class LatentODE1_(nn.Module):
     """
     dglucose/dt = NN(glucose,insulin)
     """
     def __init__(self,hidden_dim,input_dim,batch_size,device):
-        super(latentODE2_, self).__init__()
+        super(LatentODE1_, self).__init__()
         
         self.x = torch.zeros(batch_size,SEQUENCE_LENGTH,input_dim).to(device)
         self.dt = torch.zeros(batch_size,SEQUENCE_LENGTH,1).to(device)
         self.device = device
         self.net = nn.Sequential(
-            nn.Linear(input_dim+hidden_dim, 20),
+            nn.Linear(input_dim+hidden_dim, 50),
             nn.ReLU(),
-            nn.Linear(20, hidden_dim),
+            nn.Linear(50, hidden_dim),
             nn.Tanh(),
         )
 
@@ -179,10 +209,10 @@ class latentODE2_(nn.Module):
         xz = torch.cat((z,self.x),2)
         return self.net(xz)*(self.dt*DT_SCALER) # -> scale by timestep
     
-    def solve_ode(self, z0, t, x):
+    def solve_ode(self, z0, t, x, method,**kwargs):
         self.x = x  # overwrites
         self.dt = t
-        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),rtol=1e-3, atol=1e-3)[1]
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),method=method,options=kwargs)[1]
         return outputs
     
 class LatentODE1(Baseline):
@@ -190,25 +220,41 @@ class LatentODE1(Baseline):
     def __init__(self, input_dim, hidden_dim, p, output_dim, batch_size,device):
         Baseline.__init__(self,input_dim, hidden_dim, p, output_dim, device)
         self.device = device
-        self.func = latentODE2_(hidden_dim,input_dim,batch_size,device).to(device)
+        self.func = LatentODE1_(hidden_dim,input_dim,batch_size,device).to(device)
         self.mu_net = nn.Sequential(
-            nn.Linear(hidden_dim, 10),
+            #nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(10, 1)
+            nn.Linear(hidden_dim, 1)
         ).to(device)
-        self.encode_z0 = nn.Sequential(
-            nn.Linear(input_dim, 10),
+        self.sigma_net = nn.Sequential(
+            #nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(10, hidden_dim),
+            nn.Linear(hidden_dim, 1),
+            nn.Softplus(),
+        ).to(device)
+#         self.encode_z0 = nn.Sequential(
+#             #nn.BatchNorm1d(input_dim),
+#             nn.Linear(input_dim, 50),
+#             nn.Tanh(),
+#             nn.Linear(50, hidden_dim),
+#             nn.Tanh(),
+#         ).to(device)
+        self.jumpNN = nn.Sequential(
+            #nn.BatchNorm1d(input_dim),
+            nn.Linear(input_dim, 50),
+            nn.Tanh(),
+            nn.Linear(50, hidden_dim),
             nn.Tanh(),
         ).to(device)
         
-        for m in self.encode_z0.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0, std=0.1)
-                nn.init.constant_(m.bias, val=0)
+#         for m in self.encode_z0.modules():
+#             if isinstance(m, nn.Linear):
+#                 nn.init.normal_(m.weight, mean=0, std=0.1)
+#                 nn.init.constant_(m.bias, val=0)
         
-    def forward(self, dt, x, p=0.0):
+    def forward(self, dt, x, p=0.0,epoch=0):
         
         #x = x.squeeze(0)
         batch_size = x.size(0)
@@ -216,18 +262,28 @@ class LatentODE1(Baseline):
         
         # ODE
         mu_out = torch.zeros(batch_size,T,1,device = self.device)
+        sigma_out = torch.zeros(batch_size,T,1,device = self.device)
         #z0 = 0.01 * torch.randn(batch_size,1,self.hidden_dim,device = self.device)
-        z0 = self.encode_z0(x[:,0,:]).unsqueeze(1)
+        #z0 = self.encode_z0(x[:,0,:]).unsqueeze(1)
+        #z0 = torch.zeros(batch_size,1,self.hidden_dim,device = self.device)
         for i in range(0,T):
             x_i = x[:,i:(i+1),:]
             dt_i = (dt[:,i,:][:,1] - dt[:,i,:][:,0]).unsqueeze(1).unsqueeze(1)
-            z0 = self.func.solve_ode(z0,dt_i,x_i)
+            z0 = self.jumpNN(x_i)
+            z0 = self.func.solve_ode(z0,dt_i,x_i,'euler',step_size=0.1)
             mu_out[:,i:(i+1),:] = self.mu_net(z0.squeeze(1)).unsqueeze(1)
-
-        return mu_out
+            sigma_out[:,i:(i+1),:] = self.sigma_net(z0.squeeze(1)).unsqueeze(1)
+            
+        return mu_out,sigma_out
     
-    def loss_fn(self,y_,y,msk):
-        return torch.mean((y_[msk] - y[msk])**2)
+    def loss_fn(self,mu_s_,y,msk):
+        y_, s_ = mu_s_
+        distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
+        likelihood = distribution.log_prob(y[msk].unsqueeze(1))
+        return -torch.sum(likelihood)
+
+#     def loss_fn(self,y_,y,msk):
+#         return torch.sum((y_[msk] - y[msk])**2)
         
 #-------------------------------------------------------------------------------------------------
 
@@ -260,7 +316,7 @@ class ODERNN_(nn.Module):
     def solve_ode(self, z0, t, x):
         self.x = x  # overwrites
         self.dt = t
-        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),rtol=1e-1, atol=1e-1)[1]
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
         return outputs
 
 class ODERNN(Baseline):
@@ -273,16 +329,27 @@ class ODERNN(Baseline):
         self.rnn = nn.RNNCell(input_dim, hidden_dim)
         self.func = ODERNN_(input_dim,hidden_dim,batch_size,device)
         # N(mu,sigma)
+        # mu
         self.relu = nn.ReLU()
         self.l1 = nn.Linear(hidden_dim,hidden_dim//2)
         self.distribution_mu = nn.Linear(hidden_dim//2, 1)
+        self.relu = nn.ReLU()
+        self.sigma_net = nn.Sequential(
+            #nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+            nn.Softplus(),
+        ).to(device)
 
-    def forward(self, dt, x, p=0.0):
+
+    def forward(self, dt, x, p=0.0,epoch=0):
         
         T = x.size(1)
 
         batch_size = x.size(0)
         mu_out = torch.zeros(batch_size,T,1,device = self.device)
+        sigma_out = torch.zeros(batch_size,T,1,device = self.device)
         h_t = torch.zeros(batch_size, self.rnn.hidden_size,device=self.device)
         for i in range(0,T):
             x_i = x[:,i:(i+1),:]
@@ -293,17 +360,249 @@ class ODERNN(Baseline):
             mu = F.dropout(mu,training=True,p=p)
             mu = self.relu(mu)
             mu_out[:,i:(i+1),:] = self.distribution_mu(mu).unsqueeze(1)
-
-        return mu_out
+            sigma_out[:,i:(i+1),:] = self.sigma_net(h_t.squeeze(1)).unsqueeze(1)
+        return (mu_out,sigma_out)
     
-    def loss_fn(self,y_,y,msk):
-        return torch.mean((y_[msk] - y[msk])**2)
+    def loss_fn(self,mu_s_,y,msk):
+        y_, s_ = mu_s_
+        distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
+        likelihood = distribution.log_prob(y[msk].unsqueeze(1))
+        return -torch.sum(likelihood)
+
+#     def loss_fn(self,y_,y,msk):
+#         return torch.mean((y_[msk] - y[msk])**2)
+
+#-------------------------------------------------------------------------------------------------
+
+class ODEGRU_(nn.Module):
+    """
+    In an ODE-GRU the hidden state h_t of the GRU evolves according to
+    an ODE. This ODE is a neural network, i.e. dh/dt = ODEFunc(h,x).
+    """
+    def __init__(self,input_dim,hidden_dim,batch_size,device):
+        super(ODEGRU_, self).__init__()
+
+        self.x = torch.zeros(batch_size,SEQUENCE_LENGTH,input_dim).to(device)
+        self.dt = torch.zeros(batch_size,SEQUENCE_LENGTH,1).to(device)
+        self.device = device
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, 50),
+            nn.Tanh(),
+            nn.Linear(50, hidden_dim),
+            nn.Tanh(),
+        )
+
+        for m in self.net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.bias, val=0)
+
+    def forward(self, dt, y):
+        return self.net(y)*(self.dt*DT_SCALER)
+    
+    def solve_ode(self, z0, t, x):
+        self.x = x  # overwrites
+        self.dt = t
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
+        return outputs
+
+class ODEGRU(Baseline):
+    """
+    ODE-GRU
+    """
+    def __init__(self, input_dim, hidden_dim, p, output_dim, batch_size,device):
+        Baseline.__init__(self,input_dim, hidden_dim, p, output_dim, device)
+        # ODE-GRU
+        self.rnn = nn.GRUCell(input_dim, hidden_dim)
+        self.func = ODEGRU_(input_dim,hidden_dim,batch_size,device)
+        # N(mu,sigma)
+        # mu
+        self.relu = nn.ReLU()
+        self.l1 = nn.Linear(hidden_dim,hidden_dim//2)
+        self.distribution_mu = nn.Linear(hidden_dim//2, 1)
+        self.relu = nn.ReLU()
+        self.sigma_net = nn.Sequential(
+            #nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+            nn.Softplus(),
+        ).to(device)
+
+
+    def forward(self, dt, x, p=0.0,epoch=0):
+        
+        T = x.size(1)
+
+        batch_size = x.size(0)
+        mu_out = torch.zeros(batch_size,T,1,device = self.device)
+        sigma_out = torch.zeros(batch_size,T,1,device = self.device)
+        h_t = torch.zeros(batch_size, self.rnn.hidden_size,device=self.device)
+        for i in range(0,T):
+            x_i = x[:,i:(i+1),:]
+            dt_i = (dt[:,i,:][:,1] - dt[:,i,:][:,0]).unsqueeze(1)
+            h_t = self.rnn(x_i.squeeze(1),h_t)
+            h_t = self.func.solve_ode(h_t,dt_i,x_i)
+            mu = self.l1(h_t)
+            mu = F.dropout(mu,training=True,p=p)
+            mu = self.relu(mu)
+            mu_out[:,i:(i+1),:] = self.distribution_mu(mu).unsqueeze(1)
+            sigma_out[:,i:(i+1),:] = self.sigma_net(h_t.squeeze(1)).unsqueeze(1)
+        return (mu_out,sigma_out)
+    
+    def loss_fn(self,mu_s_,y,msk):
+        y_, s_ = mu_s_
+        distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
+        likelihood = distribution.log_prob(y[msk].unsqueeze(1))
+        return -torch.sum(likelihood)
+
+#     def loss_fn(self,y_,y,msk):
+#         return torch.mean((y_[msk] - y[msk])**2)
+
+#-------------------------------------------------------------------------------------------------
+
+class ODELSTM_(nn.Module):
+    """
+    In an ODE-LSTM the hidden state h_t of the LSTM evolves according to
+    an ODE. This ODE is a neural network, i.e. dh/dt = ODEFunc(h,x).
+    """
+    def __init__(self,input_dim,hidden_dim,batch_size,device):
+        super(ODELSTM_, self).__init__()
+
+        self.x = torch.zeros(batch_size,SEQUENCE_LENGTH,input_dim).to(device)
+        self.dt = torch.zeros(batch_size,SEQUENCE_LENGTH,1).to(device)
+        self.device = device
+        self.net = nn.Sequential(
+            nn.Linear(hidden_dim, 50),
+            nn.Tanh(),
+            nn.Linear(50, hidden_dim),
+            nn.Tanh(),
+        )
+
+        for m in self.net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.bias, val=0)
+
+    def forward(self, dt, y):
+        return self.net(y)*(self.dt*DT_SCALER)
+    
+    def solve_ode(self, z0, t, x):
+        self.x = x  # overwrites
+        self.dt = t
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
+        return outputs
+
+class ODELSTM(Baseline):
+    """
+    ODE-LSTM
+    """
+    def __init__(self, input_dim, hidden_dim, p, output_dim, batch_size,device):
+        Baseline.__init__(self,input_dim, hidden_dim, p, output_dim, device)
+        # ODE-LSTM
+        self.rnn = nn.LSTMCell(input_dim, hidden_dim)
+        #self.cfunc = ODELSTM_(input_dim,hidden_dim,batch_size,device)
+        self.hfunc = ODELSTM_(input_dim,hidden_dim,batch_size,device)
+        # N(mu,sigma)
+        # mu
+        self.relu = nn.ReLU()
+        self.l1 = nn.Linear(hidden_dim,hidden_dim//2)
+        self.distribution_mu = nn.Linear(hidden_dim//2, 1)
+        self.relu = nn.ReLU()
+        self.sigma_net = nn.Sequential(
+            #nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+            nn.Softplus(),
+        ).to(device)
+
+
+    def forward(self, dt, x, p=0.0,epoch=0):
+        
+        T = x.size(1)
+
+        batch_size = x.size(0)
+        mu_out = torch.zeros(batch_size,T,1,device = self.device)
+        sigma_out = torch.zeros(batch_size,T,1,device = self.device)
+        h_t = torch.zeros(batch_size, self.rnn.hidden_size,device=self.device)
+        c_t = torch.zeros(batch_size, self.rnn.hidden_size,device=self.device)
+        for i in range(0,T):
+            x_i = x[:,i:(i+1),:]
+            dt_i = (dt[:,i,:][:,1] - dt[:,i,:][:,0]).unsqueeze(1)
+            h_t,c_t = self.rnn(x_i.squeeze(1),(h_t,c_t))
+            #c_t = self.cfunc.solve_ode(c_t,dt_i,x_i)
+            h_t = self.hfunc.solve_ode(h_t,dt_i,x_i)
+            mu = self.l1(h_t)
+            mu = F.dropout(mu,training=True,p=p)
+            mu = self.relu(mu)
+            mu_out[:,i:(i+1),:] = self.distribution_mu(mu).unsqueeze(1)
+            sigma_out[:,i:(i+1),:] = self.sigma_net(h_t.squeeze(1)).unsqueeze(1)
+        return (mu_out,sigma_out)
+    
+    def loss_fn(self,mu_s_,y,msk):
+        y_, s_ = mu_s_
+        distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
+        likelihood = distribution.log_prob(y[msk].unsqueeze(1))
+        return -torch.sum(likelihood)
+
+#     def loss_fn(self,y_,y,msk):
+#         return torch.mean((y_[msk] - y[msk])**2)
+
+class LSTM(Baseline):
+    """
+    LSTM
+    """
+    def __init__(self, input_dim, hidden_dim, p, output_dim, batch_size,device):
+        Baseline.__init__(self,input_dim, hidden_dim, p, output_dim, device)
+        # LSTM
+        self.rnn = nn.LSTMCell(input_dim, hidden_dim)
+        # N(mu,sigma)
+        # mu
+        self.relu = nn.ReLU()
+        self.l1 = nn.Linear(hidden_dim,hidden_dim//2)
+        self.distribution_mu = nn.Linear(hidden_dim//2, 1)
+        self.relu = nn.ReLU()
+        self.sigma_net = nn.Sequential(
+            #nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1),
+            nn.Softplus(),
+        ).to(device)
+
+
+    def forward(self, dt, x, p=0.0,epoch=0):
+        
+        T = x.size(1)
+
+        batch_size = x.size(0)
+        mu_out = torch.zeros(batch_size,T,1,device = self.device)
+        sigma_out = torch.zeros(batch_size,T,1,device = self.device)
+        h_t = torch.zeros(batch_size, self.rnn.hidden_size,device=self.device)
+        c_t = torch.zeros(batch_size, self.rnn.hidden_size,device=self.device)
+        for i in range(0,T):
+            x_i = x[:,i:(i+1),:]
+            dt_i = (dt[:,i,:][:,1] - dt[:,i,:][:,0]).unsqueeze(1)
+            h_t,c_t = self.rnn(x_i.squeeze(1),(h_t,c_t))
+            mu = self.l1(h_t)
+            mu = F.dropout(mu,training=True,p=p)
+            mu = self.relu(mu)
+            mu_out[:,i:(i+1),:] = self.distribution_mu(mu).unsqueeze(1)
+            sigma_out[:,i:(i+1),:] = self.sigma_net(h_t.squeeze(1)).unsqueeze(1)
+        return (mu_out,sigma_out)
+    
+    def loss_fn(self,mu_s_,y,msk):
+        y_, s_ = mu_s_
+        distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
+        likelihood = distribution.log_prob(y[msk].unsqueeze(1))
+        return -torch.sum(likelihood)
 
 #-------------------------------------------------------------------------------------------------
 
 class LatentODE2_(nn.Module):
     """
-    (dglucose/dt,dh/dt) = (RNN(glucose,h),NN(h,x))
+    (dglucose/dt,dh/dt) = (NN(glucose,h),NN(h,x))
     """
     def __init__(self,hidden_dim,input_dim,batch_size,device):
         super(LatentODE2_, self).__init__()
@@ -313,9 +612,9 @@ class LatentODE2_(nn.Module):
         self.device = device
         # dh/dt
         self.dh = nn.Sequential(
-            nn.Linear(hidden_dim+input_dim, (hidden_dim+input_dim)*2),
+            nn.Linear(hidden_dim+input_dim, min((hidden_dim+input_dim)*2,50)),
             nn.Tanh(),
-            nn.Linear((hidden_dim+input_dim)*2, hidden_dim),
+            nn.Linear(min((hidden_dim+input_dim)*2,50), hidden_dim),
             nn.Tanh(),
         ).to(device)
         # dy/dt
@@ -332,12 +631,16 @@ class LatentODE2_(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, mean=0, std=0.1)
                 nn.init.constant_(m.bias, val=0)
-        nn.init.normal_(self.dy_rnn.weight_ih,mean=0, std=0.1)
-        nn.init.normal_(self.dy_rnn.weight_hh,mean=0, std=0.1)
-        nn.init.constant_(self.dy_rnn.bias_ih, val=0)
-        nn.init.constant_(self.dy_rnn.bias_ih, val=0)
-        nn.init.normal_(self.dy_lin.weight,mean=0, std=0.1)
-        nn.init.constant_(self.dy_lin.bias, val=0)
+        for m in self.dy.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.bias, val=0)
+#         nn.init.normal_(self.dy_rnn.weight_ih,mean=0, std=0.1)
+#         nn.init.normal_(self.dy_rnn.weight_hh,mean=0, std=0.1)
+#         nn.init.constant_(self.dy_rnn.bias_ih, val=0)
+#         nn.init.constant_(self.dy_rnn.bias_ih, val=0)
+#         nn.init.normal_(self.dy_lin.weight,mean=0, std=0.1)
+#         nn.init.constant_(self.dy_lin.bias, val=0)
 
     def forward(self, t, z):
         # dh/dt
@@ -352,7 +655,7 @@ class LatentODE2_(nn.Module):
     def solve_ode(self, z0, t, x):
         self.x = x  # overwrites
         self.dt = t
-        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),rtol=1e-1, atol=1e-1)[1]
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
         return outputs    
     
 class LatentODE2(Baseline):
@@ -363,7 +666,7 @@ class LatentODE2(Baseline):
         self.batch_size = batch_size
         self.func = LatentODE2_(hidden_dim,input_dim,batch_size,device).to(device)
         
-    def forward(self, dt, x, seqlen=0):
+    def forward(self, dt, x):
         
         #x = x.squeeze(0)
         batch_size = x.size(0)
@@ -383,4 +686,4 @@ class LatentODE2(Baseline):
         return mu_out
     
     def loss_fn(self,y_,y,msk):
-        return torch.mean((y_[msk] - y[msk])**2)
+        return torch.sum((y_[msk] - y[msk].unsqueeze(1))**2)

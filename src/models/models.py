@@ -9,6 +9,7 @@ import numpy as np
 
 DT_SCALER = 1 / 24
 SEQUENCE_LENGTH = 100
+LAMBDA = 1.0
 
 class Baseline(nn.Module):
     """
@@ -30,14 +31,18 @@ class Baseline(nn.Module):
         loss = 0.0
         n_batches = len(dataloader)
         print("number of batchs: {}".format(n_batches))
-        for i, (x, y, msk, dt) in enumerate(dataloader):
+        for i, (x, y, msk, dt,msk0) in enumerate(dataloader):
             x = x.to(self.device)
             y = y.to(self.device)
+            y0 = x[:,:,0:1].to(self.device)
             dt = dt.to(self.device)
             msk = msk.bool().to(self.device)
+            msk0 = msk0.bool().to(self.device)
             optim.zero_grad()
-            preds = self.forward(dt,x,epoch=epoch)
-            loss_step = self.loss_fn(preds,y,~msk.view(x.shape[0],-1))
+            preds = self.forward(dt,x,epoch=epoch,training=True)
+            pred_loss_step = self.loss_fn(preds,y,~msk.view(x.shape[0],-1))
+            #pred0_loss_step = self.loss0_fn(preds0,preds,~msk0.view(x.shape[0],-1))
+            loss_step = pred_loss_step #+ LAMBDA*pred0_loss_step
             loss_step.backward()
             torch.nn.utils.clip_grad_norm_(self.parameters(), 10.0)
             optim.step()
@@ -61,7 +66,7 @@ class Baseline(nn.Module):
         msks = []
         #dts = []
         with tqdm(total=len(dataloader)) as t:
-            for i, (x, y, msk, dt) in enumerate(dataloader):
+            for i, (x, y, msk, dt, _) in enumerate(dataloader):
                 N += sum(sum(msk == 0)).item()
                 x = x.to(self.device)
                 y = y.to(self.device)
@@ -99,20 +104,17 @@ class Baseline(nn.Module):
         """
         mu_preds = []
         sigma_preds = []
-        with tqdm(total=len(dataloader)) as t:
-            for i, (x, y, msk, dt) in enumerate(dataloader):
-                x = x.to(self.device)
-                dt = dt.to(self.device)
-                # model prediction
-                mu_,sig_ = self.forward(dt,x)
-                msk = msk.bool().to(self.device)
-                mu_preds.append((mu_.squeeze(2)[~msk.bool()]).detach().cpu().numpy())
-                sigma_preds.append((sig_.squeeze(2)[~msk.bool()]).detach().cpu().numpy())
-                t.update()
+        for i, (x, y, msk, dt, _) in enumerate(dataloader):
+            x = x.to(self.device)
+            dt = dt.to(self.device)
+            # model prediction
+            mu_,sig_ = self.forward(dt,x)
+            msk = msk.bool().to(self.device)
+            mu_preds.append((mu_.squeeze(2)[~msk.bool()]).detach().cpu().numpy())
+            sigma_preds.append((sig_.squeeze(2)[~msk.bool()]).detach().cpu().numpy())
         mu_preds = np.concatenate(mu_preds)
         sigma_preds = np.concatenate(sigma_preds)
         return mu_preds, sigma_preds
-
 
 #-------------------------------------------------------------------------------------------------
 
@@ -145,7 +147,9 @@ class NeuralODE_(nn.Module):
     def solve_ode(self, x0, t, x):
         self.x = x  # overwrites
         self.dt = t
-        outputs = odeint(self, x0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
+        #outputs = odeint(self, x0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),rtol=1e-2,atol=1e-3)[1]
+
         return outputs
     
 class NeuralODE(Baseline):
@@ -282,6 +286,7 @@ class LatentODE1(Baseline):
         likelihood = distribution.log_prob(y[msk].unsqueeze(1))
         return -torch.sum(likelihood)
 
+
 #     def loss_fn(self,y_,y,msk):
 #         return torch.sum((y_[msk] - y[msk])**2)
         
@@ -302,7 +307,7 @@ class ODERNN_(nn.Module):
             nn.Linear(hidden_dim, 50),
             nn.Tanh(),
             nn.Linear(50, hidden_dim),
-            nn.Tanh(),
+            #nn.Tanh(),
         )
 
         for m in self.net.modules():
@@ -316,7 +321,8 @@ class ODERNN_(nn.Module):
     def solve_ode(self, z0, t, x):
         self.x = x  # overwrites
         self.dt = t
-        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
+        #outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),rtol=1e-3,atol=1e-3)[1]
         return outputs
 
 class ODERNN(Baseline):
@@ -327,7 +333,13 @@ class ODERNN(Baseline):
         Baseline.__init__(self,input_dim, hidden_dim, p, output_dim, device)
         # ODE-RNN
         self.rnn = nn.RNNCell(input_dim, hidden_dim)
+        nn.init.constant_(self.rnn.bias_hh, val=0)
+        nn.init.constant_(self.rnn.bias_hh, val=0)
+        nn.init.normal_(self.rnn.weight_hh, mean=0, std=0.1)
+        nn.init.normal_(self.rnn.weight_ih, mean=0, std=0.1)
         self.func = ODERNN_(input_dim,hidden_dim,batch_size,device)
+#         self.rnn = nn.RNNCell(1, hidden_dim)
+#         self.func = ODERNN_(input_dim-1,hidden_dim,batch_size,device)
         # N(mu,sigma)
         # mu
         self.relu = nn.ReLU()
@@ -343,34 +355,57 @@ class ODERNN(Baseline):
         ).to(device)
 
 
-    def forward(self, dt, x, p=0.0,epoch=0):
+    def forward(self, dt, x, p=0.0,epoch=0,training=False):
         
         T = x.size(1)
 
         batch_size = x.size(0)
         mu_out = torch.zeros(batch_size,T,1,device = self.device)
+        mu0_out = torch.zeros(batch_size,T,1,device = self.device)
         sigma_out = torch.zeros(batch_size,T,1,device = self.device)
         h_t = torch.zeros(batch_size, self.rnn.hidden_size,device=self.device)
         for i in range(0,T):
             x_i = x[:,i:(i+1),:]
             dt_i = (dt[:,i,:][:,1] - dt[:,i,:][:,0]).unsqueeze(1)
-            h_t = self.rnn(x_i.squeeze(1),h_t)
+#             h_t = self.rnn(x_i.squeeze(1),h_t)
+#             x0_i = x[:,i:(i+1),0:1]
+#             x1_i = x[:,i:(i+1),1:]
+#             dt_i = (dt[:,i,:][:,1] - dt[:,i,:][:,0]).unsqueeze(1)
+            h_t = h_t.clone() + self.rnn(x_i.squeeze(1),h_t.clone())
+            if training==True:
+                mu0 = self.l1(h_t)
+                mu0 = F.dropout(mu0,training=training,p=p)
+                mu0 = self.relu(mu0)
+                mu0_out[:,i:(i+1),:] = self.distribution_mu(mu0).unsqueeze(1)
             h_t = self.func.solve_ode(h_t,dt_i,x_i)
             mu = self.l1(h_t)
-            mu = F.dropout(mu,training=True,p=p)
+            mu = F.dropout(mu,training=training,p=p)
             mu = self.relu(mu)
             mu_out[:,i:(i+1),:] = self.distribution_mu(mu).unsqueeze(1)
             sigma_out[:,i:(i+1),:] = self.sigma_net(h_t.squeeze(1)).unsqueeze(1)
-        return (mu_out,sigma_out)
+        if training == True:
+            return (mu_out,sigma_out),mu0_out
+        else:
+            return (mu_out,sigma_out)
     
     def loss_fn(self,mu_s_,y,msk):
         y_, s_ = mu_s_
         distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
         likelihood = distribution.log_prob(y[msk].unsqueeze(1))
         return -torch.sum(likelihood)
+    
+    def loss0_fn(self,mu0,y0,msk):
+#         print(y0[0].shape)
+#         print(mu0.shape)
+#         print(msk.shape)
+        distribution = torch.distributions.normal.Normal(mu0.squeeze(2)[msk], 1.0)
+        likelihood = distribution.log_prob(y0[0].squeeze(2)[msk])
+#         print(distribution)
+        return -torch.sum(likelihood)#torch.mean((mu0.squeeze(2)[msk])**2)#
 
 #     def loss_fn(self,y_,y,msk):
 #         return torch.mean((y_[msk] - y[msk])**2)
+
 
 #-------------------------------------------------------------------------------------------------
 
@@ -430,7 +465,7 @@ class ODEGRU(Baseline):
         ).to(device)
 
 
-    def forward(self, dt, x, p=0.0,epoch=0):
+    def forward(self, dt, x, p=0.0,epoch=0,training=False):
         
         T = x.size(1)
 
@@ -518,7 +553,7 @@ class ODELSTM(Baseline):
         ).to(device)
 
 
-    def forward(self, dt, x, p=0.0,epoch=0):
+    def forward(self, dt, x, p=0.0,epoch=0,training=False):
         
         T = x.size(1)
 
@@ -572,7 +607,7 @@ class LSTM(Baseline):
         ).to(device)
 
 
-    def forward(self, dt, x, p=0.0,epoch=0):
+    def forward(self, dt, x, p=0.0,epoch=0,training=False):
         
         T = x.size(1)
 

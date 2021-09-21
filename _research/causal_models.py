@@ -252,3 +252,72 @@ class cODERNN(Baseline):
         assert y_.shape == y.shape
         assert y_.shape == msk.shape
         return torch.mean((y_[msk] - y[msk])**2)
+
+    
+########################################################################################
+
+class NeuralODE_(nn.Module):
+    """
+    dglucose/dt = NN(glucose,insulin)
+    """
+    def __init__(self,feature_dim,batch_size,device):
+        super(NeuralODE_, self).__init__()
+        
+        self.x = torch.zeros(batch_size,SEQUENCE_LENGTH,feature_dim).to(device)
+        self.dt = torch.zeros(batch_size,SEQUENCE_LENGTH,1).to(device)
+        self.device = device
+        self.net = nn.Sequential(
+            nn.Linear(feature_dim, 50),
+            nn.ReLU(),
+            nn.Linear(50, 1),
+            nn.Tanh(),
+        )
+
+        for m in self.net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.bias, val=0)
+
+    def forward(self, t, z):
+        xz = torch.cat((z,self.x),2)
+        return self.net(xz)*(self.dt*DT_SCALER) # -> scale by timestep
+    
+    def solve_ode(self, x0, t, x):
+        self.x = x  # overwrites
+        self.dt = t
+        #outputs = odeint(self, x0, torch.tensor([0,1.0]).to(self.device),method='euler',options=dict(step_size=0.1))[1]
+        outputs = odeint(self, z0, torch.tensor([0,1.0]).to(self.device),rtol=1e-2,atol=1e-3)[1]
+
+        return outputs
+    
+class NeuralODE(Baseline):
+
+    def __init__(self, feature_dim, hidden_dim, p, output_dim, batch_size,device):
+        Baseline.__init__(self,feature_dim, hidden_dim, p, output_dim, device)
+        self.device = device
+        self.func = NeuralODE_(feature_dim,batch_size,device).to(device)
+        
+    def forward(self, dt, x, p=0.0):
+        
+        #x = x.squeeze(0)
+        #dt = dt.squeeze(0)
+        T = x.size(1)
+        
+        # ODE
+        mu_out = torch.zeros(x.size(0),T,1,device = self.device)
+        for i in range(0,T):
+            y0 = x[:,i:(i+1),0:1]
+            x_i = x[:,i:(i+1),1:]
+            dt_i = (dt[:,i,:][:,1] - dt[:,i,:][:,0]).unsqueeze(1).unsqueeze(1)
+            mu_out[:,i:(i+1),:] = self.func.solve_ode(y0,dt_i,x_i)
+
+        return mu_out
+    
+#     def loss_fn(self,mu_s_,y,msk):
+#         y_, s_ = mu_s_
+#         distribution = torch.distributions.normal.Normal(y_[msk], s_[msk])
+#         likelihood = distribution.log_prob(y[msk])
+#         return -torch.mean(likelihood)
+
+    def loss_fn(self,y_,y,msk):
+        return torch.sum((y_[msk] - y[msk])**2)

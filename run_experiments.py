@@ -224,25 +224,29 @@ if __name__ == '__main__':
     df = import_data('data/analysis.csv')
     df.sort_values(by=['icustay_id','timer'],inplace=True)
     df.reset_index(drop=True,inplace=True)
+    # shuffle here is desired...
+    # <code>
     ids = df.icustay_id.unique()
-    cv_ids, hyper_ids = train_test_split(ids,test_size=0.1,random_state=SEED,shuffle=True)
+    cv_ids, hyper_ids = train_test_split(ids,test_size=0.1,shuffle=False)
     df_cv = df.loc[df.icustay_id.isin(cv_ids)].copy(deep=True)
     df_hyper = df.loc[df.icustay_id.isin(hyper_ids)].copy(deep=True)
 
     kf = KFold(n_splits=NFOLDS,random_state=SEED,shuffle=True)
     kf.get_n_splits(cv_ids)
     
-    # store predictions
-    mu_preds = []
-    sigma_preds = []
+    # store predictions and observations
+    mu_preds,sigma_preds = [], []
     y_obs = []
-    test_indices = []
+    
+    # store metrics
+    # ...
     
     # choose hyperparameters
+    log_test.info("-------------------- new experiment ---------------------------")
+    
     for fold, (train_index, test_index) in enumerate(kf.split(cv_ids)):
         
         print('----------------------','FOLD',fold,'-----------------------')
-        test_indices.append(test_index)
         
         # train-test split
         trains_ids,test_ids = cv_ids[train_index],cv_ids[test_index]
@@ -328,12 +332,14 @@ if __name__ == '__main__':
         int_score_fold = (upper - lower) + 2/alpha*(lower - y_obs_fold)*(y_obs_fold < lower) + 2/alpha*(y_obs_fold - upper)*(y_obs_fold > upper)
         int_coverage_fold = sum((lower < y_obs_fold) & (upper > y_obs_fold))/y_obs_fold.shape[0]
         int_width_fold = np.mean(ginv(upper) - ginv(lower))
+        int_median_fold = np.median(ginv(upper) - ginv(lower))
         print("CRPS score: ",np.mean(crps_fold))
         print("Logarithmic score: ",np.mean(ig_fold))
-        print("Interval score: ",int_score)
-        print("Interval width: ",int_width)
-        print("Interval coverage: ",int_coverage)
-        print("Variance of PIT: ",var_pit)
+        print("Interval score: ",np.mean(int_score_fold))
+        print("Interval width: ",int_width_fold)
+        print("Interval coverage: ",int_coverage_fold)
+        print("Variance of PIT: ",var_pit_fold)
+        log_test.info("----- fold %s ------" % fold)
         log_test.info("feature_dim:%s" % FEATURE_DIM)
         log_test.info("hidden_dim:%s" % hidden_dim)
         log_test.info("model:\n:%s" % model)
@@ -345,11 +351,10 @@ if __name__ == '__main__':
         log_test.info("PIT variance:\n:%s" % var_pit_fold)
     
     # add to df_cv
-    test_indices = np.concatenate(test_indices)
-    df_cv.iloc[test_indices].loc[df_test.msk==0,'mu_pred'] = np.concatenate(mu_preds)
-    df_cv.iloc[test_indices].loc[df_test.msk==0,'sigma_pred'] = np.concatenate(sigma_preds)
-
-    f = sns.jointplot(data=df_cv, x="mu_pred", y="glc_dt")
+    df_cv.loc[df_cv.msk==0,'mu_pred'] = np.concatenate(mu_preds)
+    df_cv.loc[df_cv.msk==0,'mu_pred_inv'] = ginv(np.concatenate(mu_preds))
+    df_cv.loc[df_cv.msk==0,'sigma_pred'] = np.concatenate(sigma_preds)
+    f = sns.jointplot(data=df_cv, x="mu_pred_inv", y="glc_dt",plot_kws={'line_kws':{'color':'red'}, 'scatter_kws': {'alpha': 0.1}})
     f.savefig("experiments/test_sns_plot.png")
     #example_plots(y_preds,y_tests,msks)
     #probabilistic_eval_plots(y_preds,y_tests,msks)

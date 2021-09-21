@@ -266,6 +266,9 @@ if __name__ == '__main__':
     log_train.info("lr:\n:%s" % lr)
     #log_train.info("l2_penalty:\n:%s" % l2_penalty)
     log_train.info("model:\n:%s" % model)
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    params = sum([np.prod(p.size()) for p in model_parameters])
+    log_train.info("number of model parameters:%s" % params)
 
     # train configuration
     model_optim = getattr(optim, optimizer)(model.parameters(), lr=lr)

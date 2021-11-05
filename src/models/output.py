@@ -1,22 +1,20 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import scipy
 import properscoring as ps 
 
-def ginv(x):
-    x = x.copy()
-    x = np.exp(x + np.log(140))
-    return x
-
-class GaussianOutputNN(nn.Module):
+class GaussianOutputNNBase(nn.Module):
     """GaussianOutputNN
     (batch_size,:,features) -> (batch_size,:,2)
     (batch_size,features) -> (batch_size,2)
     """
-    def __init__(self,hidden_dim):
+    def __init__(self,hidden_dim,g=lambda a : a,ginv=lambda a : a):
         super().__init__()
         self.output_dim = 2
+        self.ginv=ginv
+        self.g=g
         self.mu_net = nn.Sequential(
             nn.Linear(hidden_dim,hidden_dim//2),
             nn.Tanh(),
@@ -37,28 +35,15 @@ class GaussianOutputNN(nn.Module):
         sigma_out = self.sigma_net(x)
         return torch.cat((mu_out,sigma_out),1)
     
-    def loss_fn(self,pred,y):
-        """
-        (batch_size,vals) -> (?)
-        """
-        # log probs
-        m,s = pred[:,0],pred[:,1]
-        distribution = torch.distributions.normal.Normal(m, s)
-        likelihood = distribution.log_prob(y)
-        
-        llik = torch.sum(likelihood)
-        return -llik
-    
     def sse_fn(self,pred,y):
         """
         Method for calculation of the sum of squared errors
         """
         # log probs
         m,s = pred[:,0],pred[:,1]
-        c = torch.log(torch.tensor(140.0))
-        mse = torch.sum((torch.exp(m + c) - torch.exp(y + c))**2)
+        mse = torch.tensor(np.sum((self.ginv(m.cpu().numpy()) - self.ginv(y.cpu().numpy()))**2))
         return mse
-    
+
     def probabilistic_eval_fn(self,pred,y,alpha=0.05):
         m,s = pred[:,0],pred[:,1]
         alpha_q = scipy.stats.norm.ppf(1-alpha/2)
@@ -73,8 +58,8 @@ class GaussianOutputNN(nn.Module):
         int_score = (upper - lower) + 2/alpha*(lower - y)*(y < lower) + 2/alpha*(y - upper)*(y > upper)
         int_score_mean = np.mean(int_score)
         int_coverage = sum((lower < y) & (upper > y))/y.shape[0]
-        int_av_width = np.mean(ginv(upper) - ginv(lower))
-        int_med_width = np.median(ginv(upper) - ginv(lower))
+        int_av_width = np.mean(self.ginv(upper) - self.ginv(lower))
+        int_med_width = np.median(self.ginv(upper) - self.ginv(lower))
         return {'crps_mean':crps_mean,
                 'ig_mean':ig_mean,
                 'int_score_mean':int_score_mean,
@@ -83,9 +68,147 @@ class GaussianOutputNN(nn.Module):
                 'int_av_width':int_av_width,
                 'int_med_width':int_med_width}
 
+    def loss_fn(self,pred,y):
+        """
+        (batch_size,vals) -> (?)
+        """
+        # log probs
+        m,s = pred[:,0],pred[:,1]
+        distribution = torch.distributions.normal.Normal(m, s)
+        likelihood = distribution.log_prob(y)
+        llik = torch.sum(likelihood)
+        return -llik
+        
+    def loss_update_fn(self,pred,y,e):
+        """
+        (batch_size,vals) -> (?)
+        """
+        # log probs
+        m,s = pred[:,0],pred[:,1]
+        distribution = torch.distributions.normal.Normal(m, s + 1e-5)
+        likelihood = distribution.log_prob(y)
+        llik = torch.sum(likelihood)
+        return -llik
+
+class GaussianOutputNNKL(GaussianOutputNNBase):
+    """GaussianOutputNN
+    (batch_size,:,features) -> (batch_size,:,2)
+    (batch_size,features) -> (batch_size,2)
+    """
+    
+    def loss_fn(self,pred,y):
+        """
+        (batch_size,vals) -> (?)
+        """
+        # log probs
+        m,s = pred[:,0],pred[:,1]
+        distribution = torch.distributions.normal.Normal(m, s)
+        likelihood = distribution.log_prob(y)
+        llik = torch.sum(likelihood)
+        return -llik
+        
+    def loss_update_fn(self,pred,y,e):
+        """
+        (batch_size,vals) -> (?)
+        """
+        m,s = pred[:,0],pred[:,1]
+        # update distribution
+        distribution_post = torch.distributions.normal.Normal(m, s)
+        likelihood_post = distribution_post.log_prob(y)
+        # observation distribution
+        distribution_obs = torch.distributions.normal.Normal(y, e)
+        likelihood_obs = distribution_obs.log_prob(y)
+        kl = F.kl_div(likelihood_post,likelihood_obs,reduction="none",log_target=True).sum()
+        return kl
+
+class GaussianOutputNNLL(GaussianOutputNNBase):
+    """GaussianOutputNN
+    (batch_size,:,features) -> (batch_size,:,2)
+    (batch_size,features) -> (batch_size,2)
+    """
+    
+    def loss_fn(self,pred,y):
+        """
+        (batch_size,vals) -> (?)
+        """
+        # log probs
+        m,s = pred[:,0],pred[:,1]
+        distribution = torch.distributions.normal.Normal(m, s)
+        likelihood = distribution.log_prob(y)
+        llik = torch.sum(likelihood)
+        return -llik
+        
+    def loss_update_fn(self,pred,y,e):
+        """
+        (batch_size,vals) -> (?)
+        """
+        # log probs
+        m,s = pred[:,0],pred[:,1]
+        distribution = torch.distributions.normal.Normal(m, s + 1e-5)
+        likelihood = distribution.log_prob(y)
+        llik = torch.sum(likelihood)
+        return -llik
+
 class BinnedOutputNN(nn.Module):
     """BinnedOutputNN
     
     """
     def __init__(self):
         raise AttributeError('Not implemented')
+
+class ConditionalExpectNN(nn.Module):
+    """conditionalExpectNN
+    E(y|x)
+    (batch_size,:,features) -> (batch_size,:,2)
+    (batch_size,features) -> (batch_size,2)
+    """
+    def __init__(self,hidden_dim,g=lambda a : a,ginv=lambda a : a):
+        super().__init__()
+        self.output_dim = 1
+        self.ginv=ginv
+        self.mu_net = nn.Sequential(
+            nn.Linear(hidden_dim,hidden_dim//2),
+            nn.Tanh(),
+            #nn.Dropout(p=0.1),
+            nn.Linear(hidden_dim//2, 1),
+        )
+        self.mse = nn.MSELoss(reduction='sum')
+    
+    def forward(self,x):
+        """
+        x of dimension ()
+        """
+        mu_out = self.mu_net(x)
+        return mu_out
+    
+    def loss_fn(self,pred,y):
+        """
+        (batch_size,vals) -> (?)
+        """
+        mse = self.mse(pred.squeeze(1),y)
+        return mse
+    
+    def loss_update_fn(self,pred,y,e=0.0):
+        """
+        (batch_size,vals) -> (?)
+        """
+        mse = self.mse(pred.squeeze(1),y)
+        return mse
+    
+    def sse_fn(self,pred,y):
+        """
+        Method for calculation of the sum of squared errors
+        """
+        # log probs
+        mse = self.mse(pred.squeeze(1),y)
+        #mse = torch.tensor(np.sum((self.ginv(pred.numpy()) - self.ginv(y.numpy()))**2))
+        return mse
+    
+    def probabilistic_eval_fn(self,pred,y,alpha=0.05):
+        return {'crps_mean':np.NaN,
+                'ig_mean':np.NaN,
+                'int_score_mean':np.NaN,
+                'var_pit':np.NaN,
+                'int_coverage':np.NaN,
+                'int_av_width':np.NaN,
+                'int_med_width':np.NaN}

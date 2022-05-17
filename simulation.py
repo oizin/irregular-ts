@@ -25,7 +25,7 @@ nets = {'ctRNNModel': ctRNNModel,
         'ODEGRUBayes':ODEGRUBayes,
         'ctLSTMModel':ctLSTMModel,
         'neuralJumpModel':neuralJumpModel,
-        'resNeuralJumpModel':neuralJumpModel,
+        'resNeuralJumpModel':resNeuralJumpModel,
         'IMODE':IMODE,
         'dtRNNModel':dtRNNModel,
         'dtGRUModel':dtGRUModel,
@@ -34,6 +34,8 @@ nets = {'ctRNNModel': ctRNNModel,
 # cmd args
 parser = ArgumentParser()
 parser.add_argument('--N', dest='N',type=int)
+parser.add_argument('--sim_error', dest='sim_error',type=float)
+parser.add_argument('--plot', dest='plot',default=True,type=bool)
 parser.add_argument('--net', dest='net',choices=list(nets.keys()),default='ctRNNModel',type=str)
 #parser.add_argument('--hidden_dim_t', dest='hidden_dim_t',default=10,type=int)
 parser.add_argument('--seed', dest='seed',default=42,type=int)
@@ -43,6 +45,9 @@ parser.add_argument('--logfolder', dest='logfolder',default='default',type=str)
 parser.add_argument('--update_loss', dest='update_loss',default=0.1,type=float)
 parser.add_argument('--data_dir', dest='data_dir',default="data/simulation.csv",type=str)
 parser.add_argument('--loss', dest='loss',default="LL",type=str)
+parser.add_argument('--merror', dest='merror',default=0.01,type=float)
+parser.add_argument('--stationary', dest='stationary',default=1,type=int)
+parser.add_argument('--dt_scaler', dest='dt_scaler',default=1.0,type=float)
 parser = BaseModel.add_model_specific_args(parser)
 parser = pl.Trainer.add_argparse_args(parser)
 args = parser.parse_args()
@@ -83,7 +88,8 @@ if __name__ == '__main__':
     print(input_dims)
     print(hidden_dims)
     net = nets[dict_args['net']]
-    model = net(input_dims,hidden_dims,outputNN,learning_rate=dict_args['lr'],update_loss=dict_args['update_loss'])
+    model = net(input_dims,hidden_dims,outputNN,learning_rate=dict_args['lr'],
+                update_loss=dict_args['update_loss'],merror=dict_args["merror"],dt_scaler=dict_args["dt_scaler"])
 
     # logging
     logger = CSVLogger("experiments/simulations",name=dict_args['logfolder'])
@@ -103,29 +109,27 @@ if __name__ == '__main__':
     test_res = trainer.test(model,sim,ckpt_path="best")
     
     # save simulation settings
-    df_settings = pd.DataFrame([dict_args['N']],columns=['N'])
+    df_settings = pd.DataFrame({'N':[dict_args['N']],'loss':[dict_args['loss']],'sim_error':[dict_args['sim_error']],'stationary':[dict_args['stationary']]})
     df_settings.to_csv(os.path.join(trainer.logger.log_dir,'settings.csv'))
 
     # plot some examples
-    if not dict_args['net'] in ['dtRNNModel','dtGRUModel','dtLSTMModel']:
-        df = pd.read_csv(dict_args['data_dir'])
-        dl_test = sim.val_dataloader()
-        xt, x0, xi, y, msk, dt, _, id = next(iter(dl_test))
-        ids = [id_.item() for id_ in id]
+    if dict_args['plot'] == True:
+        if not dict_args['net'] in ['dtRNNModel','dtGRUModel','dtLSTMModel']:
+            df = pd.read_csv(dict_args['data_dir'])
+            dl_test = sim.val_dataloader()
+            xt, x0, xi, y, msk, dt, _, id = next(iter(dl_test))
+            ids = [id_.item() for id_ in id]
 
-#         def glc_transform(x):
-#             x = x.copy()
-#             x[x > 0] = np.log(x[x > 0]) - np.log(140)
-#             return x
-
-        n_examples = 20
-        for i in range(n_examples):
-            msk_j = ~msk[i].bool()
-            dt_j = dt[i][msk_j].unsqueeze(0)
-            xt_j = xt[i][msk_j].unsqueeze(0)
-            x0_j = x0[i][msk_j].unsqueeze(0)
-            xi_j = xi[i][msk_j].unsqueeze(0)
-            y_j = y[i][msk_j]
-            df_j = df.loc[df.id == id[i].item(),:]
-            predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,df_j.x_true,df_j.t,nsteps=30,ginv=ginv)
-            plt.savefig(os.path.join(trainer.logger.log_dir,'example_'+str(i)+'.png'),bbox_inches='tight', dpi=150)
+            n_examples = 10
+            for i in range(n_examples):
+                with torch.no_grad():
+                    model.eval()
+                    msk_j = ~msk[i].bool()
+                    dt_j = dt[i][msk_j].unsqueeze(0)
+                    xt_j = xt[i][msk_j].unsqueeze(0)
+                    x0_j = x0[i][msk_j].unsqueeze(0)
+                    xi_j = xi[i][msk_j].unsqueeze(0)
+                    y_j = y[i][msk_j]
+                    df_j = df.loc[df.id == id[i].item(),:]
+                    predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,df_j.x_true,df_j.t,nsteps=20,ginv=ginv)
+                    plt.savefig(os.path.join(trainer.logger.log_dir,'example_'+str(i)+'.png'),bbox_inches='tight', dpi=150)

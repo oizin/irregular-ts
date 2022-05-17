@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import pytorch_lightning as pl
 import numpy as np
+import matplotlib.pyplot as plt 
 
 class BaseModel(pl.LightningModule):
     """BaseModel
@@ -17,7 +18,7 @@ class BaseModel(pl.LightningModule):
     
     input_dims - a dictionary
     """
-    def __init__(self,RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate=1e-2,update_loss=None):
+    def __init__(self,RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate=1e-2,update_loss=None,merror=1e-5):
         super().__init__()
         self.save_hyperparameters()
         self.RNN = RNN
@@ -33,12 +34,14 @@ class BaseModel(pl.LightningModule):
         self.update_loss_scale = 1.0
         self.preNN = preNN
         self.NN0 = NN0
+        self.merror=merror
 
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("BaseModel")
         parser.add_argument("--hidden_dim_t", type=int, default=12)
         parser.add_argument("--hidden_dim_0", type=int, default=12)
+        parser.add_argument("--hidden_dim_i", type=int, default=8)
         return parent_parser
             
     def configure_optimizers(self):
@@ -93,10 +96,9 @@ class BaseModelCT(BaseModel):
     
     continuous time
     """
-    def __init__(self,RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate=1e-2,update_loss=0.1,merror=0.1):
-        super().__init__(RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate,update_loss)
+    def __init__(self,RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate=1e-2,update_loss=0.1,merror=1e-5):
+        super().__init__(RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate,update_loss,merror)
         self.loss_update_fn = OutputNN.loss_update_fn
-        self.merror=merror
         
     def training_step(self, batch, batch_idx):
         xt,x0,xi,y,msk,dt,msk_update,_ = batch
@@ -115,7 +117,7 @@ class BaseModelCT(BaseModel):
         xt,x0,xi,y, msk, dt, msk_update,_ = batch
         msk = msk.bool()
         msk_update = msk_update.bool()
-        pred_step,pred_update_step = self.forward(dt,(xt,x0,xi),training = True, p = 0.2,include_update=True)
+        pred_step,pred_update_step = self.forward(dt,(xt,x0,xi),include_update=True)
         loss_pred = self.loss_fn(pred_step[~msk],y[~msk])
         loss_update = self.loss_update_fn(pred_update_step[~msk_update],xt[:,:,0][~msk_update],e=self.merror)
         loss_step = loss_pred + self.update_loss*loss_update
@@ -133,8 +135,8 @@ class BaseModelCT(BaseModel):
         loss = torch.sum(loss_epoch)#/torch.sum(n_epoch)
         loss_pred = torch.sum(loss_pred_epoch)#/torch.sum(n_epoch)
         loss_update = torch.sum(loss_update_epoch)#/torch.sum(n_epoch)
-        if (loss_pred > loss_update) and ((self.update_loss_scale*self.update_loss*loss_update) / loss_pred) > 2:
-            self.update_loss_scale = self.update_loss_scale*0.5
+#         if (loss_pred > loss_update) and ((self.update_loss_scale*self.update_loss*loss_update) / loss_pred) > 2:
+#             self.update_loss_scale = self.update_loss_scale*0.5
         self.log("val_loss", loss)
         self.log("val_loss_pred", loss_pred)
         self.log("val_loss_update", loss_update)
@@ -183,10 +185,6 @@ class BaseModelCT(BaseModel):
             int_av_width = prob_eval['int_av_width']
             int_med_width = prob_eval['int_med_width']
             # log
-            self.log("test_loss", loss)
-            self.log("test_loss_pred", loss)
-            self.log("test_loss_update", loss)
-            self.log("test_rmse", rmse)
             self.log("test_var_pit", var_pit)
             self.log("test_crps", crps)
             self.log("test_ignorance", ig)
@@ -196,7 +194,7 @@ class BaseModelCT(BaseModel):
             self.log("int_av_width", int_av_width)
 
 
-    def forward(self, dt, x, training = False, p = 0.0, include_update=False):
+    def forward(self, dt, x, training = False, p = 0.2, include_update=False):
         """
         x a tuple
         """
@@ -216,10 +214,11 @@ class BaseModelCT(BaseModel):
             elif (self.preNN != None):
                 xt_i = self.preNN(xt_i)
             dt_i = dt[:,i,:]
-            
             if (include_update == True):
                 h_t_update = self.RNN.forward_update(xt_i,h_t)
                 h_t = self.RNN.forward_ode(h_t_update,dt_i,xi_i).squeeze(0)
+                h_t_update = F.dropout(h_t_update,training=training,p=p)
+                h_t = F.dropout(h_t,training=training,p=p)
                 output_update[:,i,:] = self.OutputNN(h_t_update)
                 output[:,i,:] = self.OutputNN(h_t)
             else:
@@ -303,7 +302,7 @@ class BaseModelDT(BaseModel):
             elif (self.preNN != None):
                 xt_i = self.preNN(xt_i)
             dt_i = dt[:,i,:]
-            h_t = self.RNN(torch.cat((xt_i,xi_i),1),h_t).squeeze(0)
+            h_t = self.RNN(xt_i,h_t).squeeze(0)
             h_t = F.dropout(h_t,training=training,p=p)
             output[:,i,:] = self.OutputNN(h_t)
         return output    

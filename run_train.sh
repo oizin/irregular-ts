@@ -1,10 +1,15 @@
 #!/bin/sh
-python train.py --hidden_dim_t=12 --net=ctRNNModel --gpus=0 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=12 --net=ctGRUModel --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=12 --net=ctLSTMModel --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=30 --net=neuralJumpModel --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=30 --net=resNeuralJumpModel --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=30 --net=ODEGRUBayes --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=12 --net=dtRNNModel --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=12 --net=dtGRUModel --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
-python train.py --hidden_dim_t=12 --net=dtLSTMModel --gpus=1 --max_epochs=1 --update_loss=0.1 --logfolder=sanity --test=True
+python train.py --hidden_dim_t=12 --net=ctRNNModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --net=dtRNNModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --net=ctGRUModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --net=ODEGRUBayes --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --net=dtGRUModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --net=ctLSTMModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --net=dtLSTMModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --hidden_dim_i=4 --net=neuralJumpModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --hidden_dim_i=4 --net=resNeuralJumpModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+python train.py --hidden_dim_t=12 --hidden_dim_i=4 --net=IMODE --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+
+
+
+python train.py --hidden_dim_t=12 --net=ctLSTMModel --max_epochs=5 --update_loss=0.1 --logfolder=model_results_24112021 --test=True --nfolds=1 --seed 1

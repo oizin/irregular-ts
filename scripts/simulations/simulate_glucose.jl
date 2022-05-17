@@ -16,6 +16,10 @@ s = ArgParseSettings()
         help = "random seed"
         arg_type = Int
         required = true
+    "nonstationary"
+        help = "nonstationary"
+        arg_type = Int
+        required = false
 end
 
 # model
@@ -38,19 +42,26 @@ generate_glucose_icu
 
 k : measurement process
 """
-function simulate_glucose_icu(g,k,sigma_m=0)
+function simulate_glucose_icu(g,k,sigma_m=0,nonstationary=0)
 
     ## parameters
     # fixed
     
     # random
-    pθ = Normal(0.5,0.01)  # mean reversion strength of process
+    function LogNormal2(m,std)
+        γ = 1+std^2/m^2
+        μ = log(m/sqrt(γ))
+        σ = sqrt(log(γ))
+        return LogNormal(μ,σ)
+    end
+    pθ = Normal(0.5,0.03)  # mean reversion strength of process
     pσ = Normal(20.0,2)  # variance of process
-    pᵤ = Normal(140,5)  # mean of process
-    p₀ = Normal(140,20)  # initial value
+    pᵤ = LogNormal2(140,10)  # mean of process
+    p₀ = LogNormal2(140,20)  # initial value
     pᵦ = Normal(50,5)  # insulin effect
     pm = Normal(0,sigma_m)  # measurement error scaling
-
+    ps = Normal(0,0.1) 
+    
     ## time period
     dt = 1e-2
     maxtime = 24.0
@@ -63,12 +74,19 @@ function simulate_glucose_icu(g,k,sigma_m=0)
                     x_true = zeros(length(saveat)),
                     x = zeros(length(saveat)),
                     m = zeros(length(saveat)),
-                    g = zeros(length(saveat)))
+                    g = zeros(length(saveat)),
+                    β = zeros(length(saveat)))
 
     # time 0
     # random
     x₀ = rand(p₀, 1)[1]
-    β = -rand(pᵦ, 1)[1]
+    β_ = -rand(pᵦ, 1)[1]
+    if nonstationary == 0
+        β = t -> β_
+    else
+        s = rand(ps, 1)[1]
+        β = t-> β_*(0.75 + 0.5*sin((s*t) / 12)) + 0.1*randn()
+    end
     σ = rand(pσ, 1)[1]
     μ = rand(pᵤ, 1)[1]
     θ = rand(pθ, 1)[1]
@@ -94,7 +112,7 @@ function simulate_glucose_icu(g,k,sigma_m=0)
 
         ## process update step
         dW = rand(Normal(0,dt),1)[1]
-        dx = (θ*(μ - x) + β*mₜ + gₜ)*dt + sqrt(2*θ*σ^2)*dW
+        dx = (θ*(μ - x) + β(dt*iter)*mₜ + gₜ)*dt + sqrt(2*θ*σ^2)*dW
         x = x + dx
         x_obs = x + sigma_m * randn() * log(x)
 
@@ -104,6 +122,7 @@ function simulate_glucose_icu(g,k,sigma_m=0)
             sol.obs[save_step] = obs
             sol.m[save_step] = mₜ
             sol.g[save_step] = gₜ
+            sol.β[save_step] = β(dt*iter)
             save_step += 1
         end
         iter += 1
@@ -141,7 +160,8 @@ function simulate_ensemble(N::Int,error)
                         x_true=Float64[],
                         x=Float64[],
                         m=Float64[],
-                        g=Float64[])
+                        g=Float64[],
+                        β=Float64[])
     for i in 1:N
         df_i = simulate_glucose_icu(g,next_obs,error);
         df_i.id = repeat([i],size(df_i,1))

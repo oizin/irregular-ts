@@ -44,7 +44,7 @@ class IMODE_JumpNN(nn.Module):
         super().__init__()
         
         # dimensions
-        hx_dim,hi_dim = hidden_dims['hidden_dim_x'],hidden_dims['hidden_dim_i']
+        hx_dim,hi_dim = hidden_dims['hidden_dim_t'],hidden_dims['hidden_dim_i']
         self.hx_dim = hx_dim
         self.hi_dim = hi_dim
         x_input, i_input = feature_dims['input_dim_t'],feature_dims['input_dim_i']

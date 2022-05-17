@@ -33,16 +33,19 @@ def obs_data(x_j,y_j,dt_j):
     ts = torch.cat((dt_j.squeeze(0)[0],dt_j.squeeze(0)[1:,1]))
     return ys.numpy(),ts.numpy()
 
-def plot_trajectory_dist(t_j,ys_j,ts_j,mu_tj,sigma_tj,y_full,t_full,ginv=lambda x: x,xlabel="x",ylabel="y",title="",sim=False):
+def plot_trajectory_dist(t_j,ys_j,ts_j,mu_tj,sigma_tj,y_full,t_full,ginv=lambda x: x,xlabel="x",ylabel="y",title="",sim=False,maxtime=24):
     levels = np.linspace(0.1, 1.96, 5)
     fig, ax = plt.subplots(1, 1, tight_layout=True)
-    ax.scatter(t_j,ginv(ys_j),color='r')
-    ax.scatter(t_full,y_full,color='r',s=0.1)
+    mtj = t_j < maxtime
+    mtsj = ts_j < maxtime
+    mtfull = t_full < maxtime
+    ax.scatter(t_j[mtj],ginv(ys_j)[mtj],color='r')
+    ax.scatter(t_full[mtfull],y_full[mtfull],color='r',s=0.1)
     if sim == True:
-        ax.plot(t_full,y_full,color='r',linewidth=0.1)
+        ax.plot(t_full[mtfull],y_full[mtfull],color='r',linewidth=0.1)
     for level in levels:
-        ax.fill_between(ts_j, ginv(mu_tj - level*sigma_tj), 
-                        ginv(mu_tj + level*sigma_tj), color='b', alpha=.1, edgecolor='w')
+        ax.fill_between(ts_j[mtsj], ginv(mu_tj - level*sigma_tj)[mtsj], 
+                        ginv(mu_tj + level*sigma_tj)[mtsj], color='b', alpha=.1, edgecolor='w')
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
@@ -52,7 +55,8 @@ def plot_trajectory_point(t_j,ys_j,ts_j,mu_tj,y_full,t_full,ginv=lambda x: x,xla
     levels = np.linspace(0.1, 1.0, 5)
     fig, ax = plt.subplots(1, 1, tight_layout=True)
     ax.scatter(t_j,ginv(ys_j),color='r')
-    ax.plot(t_full,y_full,color='r',linewidth=0.1)
+    #ax.plot(t_full,y_full,color='r',linewidth=0.1)
+    #ax.scatter(ts_j,ginv(mu_tj),0.1,color='b')
     ax.plot(ts_j,ginv(mu_tj),color='b')
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)

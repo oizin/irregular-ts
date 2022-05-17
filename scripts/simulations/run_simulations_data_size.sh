@@ -3,7 +3,7 @@ echo "1_000 examples simulation\n"
 for s in 1 2 3
 do
 echo "1_000 examples simulation $s\n"
-julia scripts/simulations/simulate_glucose.jl 1000 0.0 $s
+julia scripts/simulations/simulate_glucose.jl 1000 0.0 $s 
 python simulation.py --net ctRNNModel --max_epochs 100 --logfolder data_size --N 1000
 python simulation.py --net ctGRUModel --max_epochs 100 --logfolder data_size --N 1000
 python simulation.py --net ctLSTMModel --max_epochs 100 --logfolder data_size --N 1000

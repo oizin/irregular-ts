@@ -17,11 +17,13 @@ class GaussianOutputNNBase(nn.Module):
         self.g=g
         self.mu_net = nn.Sequential(
             nn.Linear(hidden_dim,hidden_dim//2),
+            nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(hidden_dim//2, 1),
         )
         self.sigma_net = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim//2),
+            nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(hidden_dim//2, 1),
             nn.Softplus(),
@@ -55,11 +57,14 @@ class GaussianOutputNNBase(nn.Module):
         crps_mean = np.mean(crps)
         ig = scipy.stats.norm.logpdf(y,loc=m, scale=s)
         ig_mean = np.mean(ig)
-        int_score = (upper - lower) + 2/alpha*(lower - y)*(y < lower) + 2/alpha*(y - upper)*(y > upper)
+        upper = self.ginv(upper)
+        lower = self.ginv(lower)
+        yinv = self.ginv(y)
+        int_score = (upper - lower) + 2/alpha*(lower - yinv)*(yinv < lower) + 2/alpha*(yinv - upper)*(yinv > upper)
         int_score_mean = np.mean(int_score)
-        int_coverage = sum((lower < y) & (upper > y))/y.shape[0]
-        int_av_width = np.mean(self.ginv(upper) - self.ginv(lower))
-        int_med_width = np.median(self.ginv(upper) - self.ginv(lower))
+        int_coverage = sum((lower < yinv) & (upper > yinv))/yinv.shape[0]
+        int_av_width = np.mean(upper - lower)
+        int_med_width = np.median(upper - lower)
         return {'crps_mean':crps_mean,
                 'ig_mean':ig_mean,
                 'int_score_mean':int_score_mean,
@@ -67,28 +72,6 @@ class GaussianOutputNNBase(nn.Module):
                 'int_coverage':int_coverage,
                 'int_av_width':int_av_width,
                 'int_med_width':int_med_width}
-
-    def loss_fn(self,pred,y):
-        """
-        (batch_size,vals) -> (?)
-        """
-        # log probs
-        m,s = pred[:,0],pred[:,1]
-        distribution = torch.distributions.normal.Normal(m, s)
-        likelihood = distribution.log_prob(y)
-        llik = torch.sum(likelihood)
-        return -llik
-        
-    def loss_update_fn(self,pred,y,e):
-        """
-        (batch_size,vals) -> (?)
-        """
-        # log probs
-        m,s = pred[:,0],pred[:,1]
-        distribution = torch.distributions.normal.Normal(m, s + 1e-5)
-        likelihood = distribution.log_prob(y)
-        llik = torch.sum(likelihood)
-        return -llik
 
 class GaussianOutputNNKL(GaussianOutputNNBase):
     """GaussianOutputNN
@@ -199,11 +182,12 @@ class ConditionalExpectNN(nn.Module):
         """
         Method for calculation of the sum of squared errors
         """
-        # log probs
-        mse = self.mse(pred.squeeze(1),y)
-        #mse = torch.tensor(np.sum((self.ginv(pred.numpy()) - self.ginv(y.numpy()))**2))
+        #mse = self.mse(pred.squeeze(1),y)
+#         print(self.ginv(pred[:,0].cpu().numpy()))
+#         print(self.ginv(y.cpu().numpy()))
+        mse = torch.tensor(np.sum((self.ginv(pred[:,0].cpu().numpy()) - self.ginv(y.cpu().numpy()))**2))
         return mse
-    
+        
     def probabilistic_eval_fn(self,pred,y,alpha=0.05):
         return {'crps_mean':np.NaN,
                 'ig_mean':np.NaN,

@@ -49,7 +49,7 @@ class ODENetHIT(nn.Module):
                 
     def forward(self,input,t,dt,hidden):
         output = self.net(torch.cat((input,t,hidden),1))
-        return output
+        return output 
     
 class ODENetHITT(nn.Module):
     """FF1: basic feedforward network (1)
@@ -116,14 +116,14 @@ class GRUNet(nn.Module):
         
     def forward(self,input,t,dt,hidden):
         output = self.net(input,hidden)
-        return output
+        return output / 10
     
 class IMODE_ODENet(nn.Module):
     def __init__(self,hidden_dims,feature_dims):
         super().__init__()
         
         # dimensions
-        hx_dim,hi_dim = hidden_dims['hidden_dim_x'],hidden_dims['hidden_dim_i']
+        hx_dim,hi_dim = hidden_dims['hidden_dim_t'],hidden_dims['hidden_dim_i']
         self.hx_dim = hx_dim
         self.hi_dim = hi_dim
         

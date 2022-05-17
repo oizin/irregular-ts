@@ -1,6 +1,5 @@
 experiments/
-data/
-data/raw*
+/data/
 .Rproj.user/
 glucose-insulin-mimic.Rproj
 .ipynb_checkpoints

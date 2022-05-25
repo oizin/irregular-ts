@@ -8,7 +8,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from argparse import ArgumentParser
 # data related
 from src.data.data_loader import MIMIC3DataModule
-from data.feature_sets import all_features_treat_dict,glycaemic_features_treat
+import json
 from sklearn.model_selection import KFold
 from sklearn.model_selection import train_test_split
 # import models
@@ -23,14 +23,14 @@ import matplotlib.pyplot as plt
 from src.plotting.trajectories import *
 
 # possible models
-nets = {'ctRNNModel': ctRNNModel,
+nets = {'ctRNNModel': ctRNNModel, # remove
         'ctGRUModel': ctGRUModel,
-        'ODEGRUBayes':ODEGRUBayes,
+        'ODEGRUBayes':ODEGRUBayes, # remove
         'ctLSTMModel':ctLSTMModel,
-        'neuralJumpModel':neuralJumpModel,
-        'resNeuralJumpModel':resNeuralJumpModel,
+        'neuralJumpModel':neuralJumpModel, # remove
+        'resNeuralJumpModel':resNeuralJumpModel, # remove
         'IMODE':IMODE,
-        'dtRNNModel':dtRNNModel,
+        'dtRNNModel':dtRNNModel, # remove
         'dtGRUModel':dtGRUModel,
         'dtLSTMModel':dtLSTMModel}
 
@@ -54,13 +54,13 @@ dict_args = vars(args)
 
 def import_data(path,verbose=True):
     df = pd.read_csv(path)
-    ids = df.icustay_id.unique()
-    for id_ in ids:
-        df_id = df.loc[df.icustay_id == id_,:]
-        if (sum(df_id.msk) == df_id.shape[0]):
-            df.drop(df.loc[df.icustay_id == id_,:].index,inplace=True)
-            if verbose:
-                print("excluding:",id_)
+    # ids = df.icustay_id.unique()
+    # for id_ in ids:
+    #     df_id = df.loc[df.icustay_id == id_,:]
+    #     if (sum(df_id.msk) == df_id.shape[0]):
+    #         df.drop(df.loc[df.icustay_id == id_,:].index,inplace=True)
+    #         if verbose:
+    #             print("excluding:",id_)
     return df
 
 def predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,y_full,t_full,nsteps=10,ginv=lambda x: x,xlabel="Time (hours in ICU)",ylabel="Blood glucose (mg/dL)",title=""):
@@ -78,7 +78,9 @@ if __name__ == '__main__':
     # data
     # features
     #input_features = all_features_treat_dict()
-    input_features = glycaemic_features_treat()
+    with open('feature_sets.json', 'r') as f:
+        feature_sets = json.load(f)
+    input_features = feature_sets['glycaemic_features']
     if dict_args['net'] in ['neuralJumpModel','resNeuralJumpModel']:
         input_features['intervention'] = input_features['intervention'] + input_features['timevarying'] 
     elif dict_args['net'] in ['IMODE']:

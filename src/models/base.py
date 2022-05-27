@@ -18,18 +18,20 @@ class BaseModel(pl.LightningModule):
     
     input_dims - a dictionary
     """
-    def __init__(self,RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate=1e-2,update_loss=None,merror=1e-5):
+    def __init__(self,RNN,OutputNN,preNN,NN0,dims,learning_rate=1e-2,update_loss=None,merror=1e-5):
         super().__init__()
-        self.save_hyperparameters()
+        #self.save_hyperparameters()
+        self.learning_rate = learning_rate
         self.RNN = RNN
         self.OutputNN = OutputNN
         self.loss_fn = OutputNN.loss_fn
         self.sse_fn = OutputNN.sse_fn
-        self.hidden_dim_t = hidden_dims['hidden_dim_t']
-        self.hidden_dim_0 = hidden_dims['hidden_dim_0']
-        self.input_dim_t = input_dims['input_dim_t']
-        self.input_dim_i = input_dims['input_dim_i']
-        self.input_dim_0 = input_dims['input_dim_0']
+        self.dims = dims
+        self.hidden_dim_t = dims['hidden_dim_t']
+        self.hidden_dim_0 = dims['hidden_dim_0']
+        self.input_dim_t = dims['input_dim_t']
+        self.input_dim_i = dims['input_dim_i']
+        self.input_dim_0 = dims['input_dim_0']
         self.update_loss = update_loss
         self.update_loss_scale = 1.0
         self.preNN = preNN
@@ -45,7 +47,7 @@ class BaseModel(pl.LightningModule):
         return parent_parser
             
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        optimizer = optim.Adam(self.parameters(), lr=self.learning_rate)
         optim_setting = {
         "optimizer": optimizer,
         "lr_scheduler": {
@@ -96,8 +98,8 @@ class BaseModelCT(BaseModel):
     
     continuous time
     """
-    def __init__(self,RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate=1e-2,update_loss=0.1,merror=1e-5):
-        super().__init__(RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate,update_loss,merror)
+    def __init__(self,RNN,OutputNN,preNN,NN0,dims,learning_rate=1e-2,update_loss=0.1,merror=1e-5):
+        super().__init__(RNN,OutputNN,preNN,NN0,dims,learning_rate,update_loss,merror)
         self.loss_update_fn = OutputNN.loss_update_fn
         
     def training_step(self, batch, batch_idx):
@@ -204,15 +206,11 @@ class BaseModelCT(BaseModel):
         output = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
         output_update = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
         h_t = torch.zeros(batch_size, self.hidden_dim_t,device=self.device)
-        if (self.NN0 != None):
-            z0 = self.NN0(x0)
+        z0 = self.NN0(x0)
         for i in range(0,T):
             xt_i = xt[:,i,:]
             xi_i = xi[:,i,:]
-            if (self.NN0 != None) & (self.preNN != None):
-                xt_i = self.preNN(torch.cat((xt_i,z0),1))
-            elif (self.preNN != None):
-                xt_i = self.preNN(xt_i)
+            xt_i = self.preNN(torch.cat((xt_i,z0),1))
             dt_i = dt[:,i,:]
             if (include_update == True):
                 h_t_update = self.RNN.forward_update(xt_i,h_t)
@@ -251,13 +249,22 @@ class BaseModelCT(BaseModel):
             h_t = h_t[-1]
         return outputs
 
+    def predict_step(self,batch, batch_idx, dataloader_idx=0):
+        xt,x0,xi,_,msk,dt,_,key = batch
+        msk = msk.bool()
+        output = self.forward(dt, (xt,x0,xi))
+        output = output[~msk.bool().repeat_interleave(1,1)]
+        key = key[~msk.bool()]
+        key = key.repeat_interleave(1,0)
+        return torch.cat((key.unsqueeze(1),output),1)
+
 class BaseModelDT(BaseModel):
     """BaseModelDT
     
     discrete time
     """
-    def __init__(self,RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate=1e-2):
-        super().__init__(RNN,OutputNN,preNN,NN0,hidden_dims,input_dims,learning_rate)
+    def __init__(self,RNN,OutputNN,preNN,NN0,dims,learning_rate=1e-2):
+        super().__init__(RNN,OutputNN,preNN,NN0,dims,learning_rate)
 
     def training_step(self, batch, batch_idx):
         xt,x0,xi,y, msk, dt, _,_ = batch

@@ -3,23 +3,10 @@ from torch.utils.data import Dataset,DataLoader
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from .data_scaler import PreProcess,PreProcessSim
+from .data_scaler import PreProcessMIMIC,PreProcessSim
 from sklearn.preprocessing import QuantileTransformer,StandardScaler
-
 import pytorch_lightning as pl
 
-def import_data(path,verbose=True):
-    df = pd.read_csv(path)
-    ids = df.icustay_id.unique()
-    for id_ in ids:
-        df_id = df.loc[df.icustay_id == id_,:]
-        if (sum(df_id.msk) == df_id.shape[0]):
-            df.drop(df.loc[df.icustay_id == id_,:].index,inplace=True)
-            if verbose:
-                print("excluding:",id_)
-    return df
-
-TIME_VARS = ["timer","timer_dt"]
 
 def collate_fn_padd(batch):
     '''
@@ -36,7 +23,7 @@ def collate_fn_padd(batch):
     msk = [torch.Tensor(b[4]) for b in batch]
     dt = [torch.Tensor(b[5]) for b in batch]
     msk0 = [torch.Tensor(b[6]) for b in batch]
-    id = [b[7] for b in batch]
+    key = [torch.Tensor(b[7]) for b in batch]
     xt = torch.nn.utils.rnn.pad_sequence(xt,batch_first=True)
     x0 = torch.nn.utils.rnn.pad_sequence(x0,batch_first=True)
     xi = torch.nn.utils.rnn.pad_sequence(xi,batch_first=True)
@@ -44,9 +31,8 @@ def collate_fn_padd(batch):
     msk = torch.nn.utils.rnn.pad_sequence(msk,batch_first=True,padding_value=int(1))
     dt = torch.nn.utils.rnn.pad_sequence(dt,batch_first=True)
     msk0 = torch.nn.utils.rnn.pad_sequence(msk0,batch_first=True,padding_value=int(1))
-    return xt,x0,xi,y,msk,dt,msk0,id
-
-TIME_VARS = ["timer","timer_dt"]
+    key = torch.nn.utils.rnn.pad_sequence(key,batch_first=True,padding_value=int(-1))
+    return xt,x0,xi,y,msk,dt,msk0,key
 
 class MIMICDataset(Dataset):
     """
@@ -60,7 +46,7 @@ class MIMICDataset(Dataset):
     def __init__(self,df,features,pad=-1,verbose=True):
         self.pad = pad
         #self.maxrows = maxrows
-        self.Xt,self.X0,self.Xi,self.y,self.msk,self.dt,self.msk0,self.seqlen,self.id = self.load_data(df,features,verbose=verbose)
+        self.Xt,self.X0,self.Xi,self.y,self.msk,self.dt,self.msk0,self.seqlen,self.key = self.load_data(df,features,verbose=verbose)
         
     def __len__(self):
         return len(self.y)
@@ -75,35 +61,33 @@ class MIMICDataset(Dataset):
         dt = self.dt[idx].astype(np.float32)
         msk0 = self.msk0[idx].astype(np.int32)
         seqlen = self.seqlen[idx]
-        id = self.id[idx].astype(np.int32)
+        key = self.key[idx].astype(np.int32)
 
-        return Xt,X0,Xi,y,msk,dt,msk0,id
+        return Xt,X0,Xi,y,msk,dt,msk0,key
     
     def load_data(self,df,features,verbose):
         """
         features a dict
         """
-        excl = []
-        n_excl_pt = 0
-        n_excl_rws = 0
-        Xt_list,X0_list,Xi_list, y_list, msk_list, dt_list, msk0_list, seqlen_list,id_list = [], [], [], [], [], [],[],[],[]
-        ids = df.icustay_id.unique()
+        Xt_list,X0_list,Xi_list, y_list, msk_list, dt_list, msk0_list, seqlen_list,key_list = [], [], [], [], [], [],[],[],[]
+        ids = df[features['id']].unique()
         if verbose:
             print("reconfiguring data...")
         for id_ in ids:
             if self.pad == -1:
-                df_id = df.loc[df.icustay_id == id_,:]
+                df_id = df.loc[df[features['id']] == id_,:]
             else:
-                df_id = df.loc[df.icustay_id == id_,:].iloc[0:self.pad]
+                df_id = df.loc[df[features['id']] == id_,:].iloc[0:self.pad]
             Xt = df_id.loc[:,features['timevarying']]
             X0 = df_id.loc[:,features['static']]
             Xi = df_id.loc[:,features['intervention']]
             X0 = X0.iloc[0,:]
-            y = df_id.loc[:,"glc_dt"]
-            msk = df_id.loc[:,"msk"]
-            dt = df_id.loc[:,TIME_VARS]
+            y = df_id.loc[:,features['target']]
+            msk = df_id.loc[:,features['target_mask']]
+            dt = df_id.loc[:,features['time_vars']]
             msk0 = df_id.loc[:,"msk0"]
             seqlen = df_id.shape[0]
+            key = df_id.loc[:,features['key']]
             Xt = np.array(Xt).astype(np.float32)
             Xi = np.array(Xi).astype(np.float32)
             X0 = np.array(X0).astype(np.float32)
@@ -111,7 +95,7 @@ class MIMICDataset(Dataset):
             msk = np.array(msk).astype(np.int32)
             dt = np.array(dt).astype(np.float32)
             msk0 = np.array(msk0).astype(np.int32)
-            id_ = np.array(id_).astype(np.int32)
+            key = np.array(key).astype(np.int32)
             Xt_list.append(Xt)
             Xi_list.append(Xi)
             X0_list.append(X0)
@@ -120,11 +104,8 @@ class MIMICDataset(Dataset):
             dt_list.append(dt)
             msk0_list.append(msk0)
             seqlen_list.append(seqlen)
-            id_list.append(id_)
-        if verbose == True:
-            print("excluded patients:",n_excl_pt)
-            print("excluded rows:",n_excl_rws)
-        return Xt_list,X0_list,Xi_list,y_list,msk_list,dt_list,msk0_list,seqlen_list,id_list
+            key_list.append(key)
+        return Xt_list,X0_list,Xi_list,y_list,msk_list,dt_list,msk0_list,seqlen_list,key_list
     
 
 class MIMIC3DataModule(pl.LightningDataModule):
@@ -146,12 +127,13 @@ class MIMIC3DataModule(pl.LightningDataModule):
         df_test = self.df_test
 
         # train-validation split
-        train_ids, valid_ids = train_test_split(df_train.icustay_id.unique(),test_size=0.1)
-        df_valid = df_train.loc[df_train.icustay_id.isin(valid_ids)].copy(deep=True)
-        df_train = df_train.loc[df_train.icustay_id.isin(train_ids)].copy(deep=True)
+        train_ids, valid_ids = train_test_split(df_train[self.features['id']].unique(),test_size=0.1)
+        df_valid = df_train.loc[df_train[self.features['id']].isin(valid_ids)].copy(deep=True)
+        df_train = df_train.loc[df_train[self.features['id']].isin(train_ids)].copy(deep=True)
 
         # preprocess
-        preproc = PreProcess(self.features,QuantileTransformer())
+
+        preproc = PreProcessMIMIC(self.features,QuantileTransformer())
         preproc.fit(df_train)
         df_train = preproc.transform(df_train)
         df_valid = preproc.transform(df_valid)

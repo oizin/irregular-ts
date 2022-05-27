@@ -5,7 +5,7 @@ from .jumpnn import *
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchctrnn
+import torchctrnn as ct
 
 #ode_tol = {'atol':1e-2,'rtol':1e-2}
 
@@ -18,32 +18,35 @@ def g(x):
     x = np.log(x) - np.log(140)
     return x
 
-class ctRNNModel(BaseModelCT):
+# class ctRNNModel(BaseModelCT):
 
-    def __init__(self,input_dims,hidden_dims,outputNN,preNN=None,NN0=None,learning_rate=0.1,update_loss=0.1,merror=1e-2,dt_scaler=1.0):
-        if preNN is None:
-            input_size_update = input_dims['input_dim_t']
-        else:
-            input_size_update = hidden_dims['hidden_dim_t']
-        odenet = ODENetHI(hidden_dims['hidden_dim_t'],input_dims['input_dim_i'])
-        odernn = torchctrnn.ODERNNCell(odenet,input_size_update,
-                                       tol={'atol':1e-2,'rtol':1e-2},method='euler',options={'step_size':0.1},dt_scaler=dt_scaler)
-        outNN = outputNN(hidden_dims['hidden_dim_t'],g=g,ginv=ginv)
-        super().__init__(odernn,outNN,preNN,NN0,hidden_dims,input_dims,learning_rate,update_loss,merror)
-        self.save_hyperparameters({'net':'ctRNNModel'})
-        
+#     def __init__(self,input_dims,hidden_dims,outputNN,preNN=None,NN0=None,learning_rate=0.1,update_loss=0.1,merror=1e-2,dt_scaler=1.0):
+#         if preNN is None:
+#             input_size_update = input_dims['input_dim_t']
+#         else:
+#             input_size_update = hidden_dims['hidden_dim_t']
+#         odenet = ODENetHI(hidden_dims['hidden_dim_t'],input_dims['input_dim_i'])
+#         odernn = torchctrnn.ODERNNCell(odenet,input_size_update,
+#                                        tol={'atol':1e-2,'rtol':1e-2},method='euler',options={'step_size':0.1},dt_scaler=dt_scaler)
+#         outNN = outputNN(hidden_dims['hidden_dim_t'],g=g,ginv=ginv)
+#         super().__init__(odernn,outNN,preNN,NN0,hidden_dims,input_dims,learning_rate,update_loss,merror)
+#         self.save_hyperparameters({'net':'ctRNNModel'})
+
+
 class ctGRUModel(BaseModelCT):
 
-    def __init__(self,input_dims,hidden_dims,outputNN,preNN=None,NN0=None,learning_rate=0.1,update_loss=0.1,merror=1e-2,dt_scaler=1.0):
-        if preNN is None:
-            input_size_update = input_dims['input_dim_t']
-        else:
-            input_size_update = hidden_dims['hidden_dim_t']
-        odenet = ODENetHI(hidden_dims['hidden_dim_t'],input_dims['input_dim_i'])
-        odernn = torchctrnn.ODEGRUCell(odenet,input_size_update,
-                                       tol={'atol':1e-3,'rtol':1e-3},method='euler',options={'step_size':0.1},dt_scaler=dt_scaler)
-        outNN = outputNN(hidden_dims['hidden_dim_t'],g=g,ginv=ginv)
-        super().__init__(odernn,outNN,preNN,NN0,hidden_dims,input_dims,learning_rate,update_loss,merror)
+    def __init__(self,dims,outputNN,preNN=nn.Identity(),NN0=nn.Identity(),learning_rate=1e-3,update_loss=0.1,merror=1e-2):
+        func = nn.Sequential(
+            nn.Linear(dims['hidden_dim_t'], 50),
+            nn.Tanh(),
+            nn.Linear(50, dims['hidden_dim_t']),
+            nn.Tanh()
+        )
+        odenet = ct.NeuralODE(func,time_func=lambda x : x / 100.0,time_dependent=False,data_dependent=False,
+                            solver='euler',solver_options={'step_size':1e-1})
+        odernn = ct.ODEGRUCell(odenet,dims['input_size_update'],dims['hidden_dim_t'])
+        outNN = outputNN(dims['hidden_dim_t'],g=g,ginv=ginv)
+        super().__init__(odernn,outNN,preNN,NN0,dims,learning_rate,update_loss,merror)
         self.save_hyperparameters({'net':'ctGRUModel'})
 
 class ODEGRUBayes(BaseModelCT):

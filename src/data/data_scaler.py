@@ -4,36 +4,43 @@ import numpy as np
 import pandas as pd
 
 def glc_transform(x):
-    x = x.copy()
+    x = x.to_numpy().copy()
     x[x > 0] = np.log(x[x > 0]) - np.log(140)
     return x
 
-class PreProcess():
-    """
-    args:
-        inputs: a dictionary
-    """
-    def __init__(self,inputs,scaler):
-        self.inputs = inputs['timevarying'] + inputs['static']
-        tmp = self.inputs.copy()
-        tmp.remove('glc')
-        self.oth_inputs = tmp
+class PreProcessMIMIC():
+
+    def __init__(self,features,scaler,features_autoreg_scaler=glc_transform):
+        """"
+        Feature scaling
+        """
+        # feature sets
+        self.features_autoreg = [features['target']] + [features['timevarying'][0]]
+        self.features_divide = list(features['features_divider'].keys())
+        vars = list(features['timevarying']) + list(features['static']) + list(features['intervention'])
+        vars = list(set(vars)) # unique
+        self.features_scaler = [v for v in vars if v not in self.features_divide + self.features_autoreg]
+
+        # scalers
         self.scaler = scaler
+        self.dividers = features['features_divider']
+        self.features_autoreg_scaler = features_autoreg_scaler
         
     def fit(self,df):
-        self.scaler.fit(df.loc[:,self.oth_inputs])
+        self.scaler.fit(df.loc[:,self.features_scaler])
         
     def transform(self,df):
-        # glucose
         df = df.copy()
-        df.loc[:,'glc'] = glc_transform(df['glc'].to_numpy())
-        df = df.copy()
-        df.loc[:,'glc_dt'] = glc_transform(df['glc_dt'].to_numpy())
+        # target / lagged target
+        for feature in self.features_autoreg:
+            df.loc[:,feature] = self.features_autoreg_scaler(df[feature])
+        # treatments / things to be divided
+        for feature in self.features_divide:
+            df.loc[:,feature] = df.loc[:,feature] / self.dividers[feature]
         # remaining variables
-        df = df.copy()
-        df.loc[:,self.oth_inputs] = self.scaler.transform(df[self.oth_inputs].copy(deep=True))
-        df = df.copy()
-        df.loc[:,self.oth_inputs] = df.loc[:,self.oth_inputs].fillna(value=0.)
+        df.loc[:,self.features_scaler] = self.scaler.transform(df[self.features_scaler])
+        df.loc[:,self.features_scaler] = df.loc[:,self.features_scaler].fillna(value=0.0)
+        
         return df
     
 class PreProcessSim():

@@ -1,6 +1,7 @@
 experiments/
-/data/
+/data/mimic.csv
 .Rproj.user/
 glucose-insulin-mimic.Rproj
 .ipynb_checkpoints
 __pycache__/
+__archive/

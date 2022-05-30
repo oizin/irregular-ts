@@ -108,7 +108,7 @@ class MIMICDataset(Dataset):
         return Xt_list,X0_list,Xi_list,y_list,msk_list,dt_list,msk0_list,seqlen_list,key_list
     
 
-class MIMIC3DataModule(pl.LightningDataModule):
+class MIMICDataModule(pl.LightningDataModule):
     def __init__(self, features,df_train,df_test, batch_size = 64, max_length=100, testing = False, verbose = False):
         """
         features a dict
@@ -133,7 +133,7 @@ class MIMIC3DataModule(pl.LightningDataModule):
 
         # preprocess
 
-        preproc = PreProcessMIMIC(self.features,QuantileTransformer())
+        preproc = PreProcessMIMIC(self.features,StandardScaler())
         preproc.fit(df_train)
         df_train = preproc.transform(df_train)
         df_valid = preproc.transform(df_valid)

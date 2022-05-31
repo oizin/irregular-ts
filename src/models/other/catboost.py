@@ -4,12 +4,13 @@ from ...metrics.metrics import probabilistic_eval_fn,sse_fn
 
 class CatboostModel(CatBoostRegressor):
     def __init__(self):
-        super().__init__(iterations=5000, 
+        super().__init__(iterations=10000, 
                           depth=3, 
                           learning_rate=1e-1, 
                           loss_function='RMSEWithUncertainty',
                           od_type='IncToDec',
-                          od_pval=0.1)
+                          od_pval=0.1,
+                          train_dir='experiments/mimic/catboost/')
 
     def eval_fn(self,pred,y,ginv):
         return probabilistic_eval_fn(pred,y,ginv)

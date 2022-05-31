@@ -29,6 +29,7 @@ models = {#'ctRNNModel': ctRNNModel,
         'CatboostModel': CatboostModel
         ,'ODEGRUModel': ODEGRUModel
         ,'FlowGRUModel': FlowGRUModel
+        ,'DecayGRUModel':DecayGRUModel
         #'ODEGRUBayes':ODEGRUBayes, 
         #'ODELSTMModel':ODELSTMModel,
         #'neuralJumpModel':neuralJumpModel, 
@@ -56,13 +57,6 @@ parser = pl.Trainer.add_argparse_args(parser)
 args = parser.parse_args()
 dict_args = vars(args)
 
-
-if dict_args['model'] in []:
-    deeplearner = True
-elif dict_args['model'] in []:
-    catboost = True
-
-
 def predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,y_full,t_full,nsteps=10,ginv=lambda x: x,xlabel="Time (hours in ICU)",ylabel="Blood glucose (mg/dL)",title=""):
     preds = model.forward_trajectory(dt_j,(xt_j,x0_j,xi_j),nsteps=nsteps)
     ts_j = time_trajectories(dt_j.squeeze(0),nsteps+1)
@@ -80,11 +74,13 @@ def g(x):
     x = np.log(x) - np.log(140)
     return x
 
+logger = CSVLogger("experiments/mimic",name=dict_args['logfolder'])
+
 def train_test_deeplearner():
 
     mimic = MIMICDataModule(features,df_train,df_test,batch_size=128,testing = False)
     print('setting up data...')
-    mimic.setup()
+    #mimic.setup()
     
     # model
     if dict_args['loss'] == "KL":
@@ -100,7 +96,7 @@ def train_test_deeplearner():
                 merror=dict_args["merror"])
 
     # logging
-    logger = CSVLogger("experiments/mimic",name=dict_args['logfolder'])
+    
     lr_monitor = LearningRateMonitor(logging_interval='step')
     checkpoint_callback = ModelCheckpoint(monitor='val_loss',save_top_k=1)
 
@@ -110,12 +106,13 @@ def train_test_deeplearner():
                         logger=logger,
                         val_check_interval=0.5,
                         log_every_n_steps=20,
-                        gradient_clip_val=2.0,
+                        gradient_clip_val=10.0,
                         callbacks=[lr_monitor,early_stopping,checkpoint_callback])
     trainer.fit(model, mimic)
 
     # test
     if dict_args['test'] == True:
+        print("testing...")
         trainer.test(model,mimic,ckpt_path="best")
 
 def train_test_catboost(df_train,df_test):
@@ -144,7 +141,10 @@ def train_test_catboost(df_train,df_test):
     preds = model.predict(test_pool)
     preds[:,1] = np.sqrt(preds[:,1])
     print(preds)
-    print(model.eval_fn(preds,y_test,ginv))
+    eval_catboost = model.eval_fn(preds,y_test,ginv)
+    print(eval_catboost)
+    logger.log_metrics(eval_catboost)
+    logger.save()
 
 def import_feature_sets():
     pass
@@ -159,7 +159,7 @@ if __name__ == '__main__':
     #input_features = all_features_treat_dict()
     with open('data/feature_sets.json', 'r') as f:
         feature_sets = json.load(f)
-    features = feature_sets['test_features']
+    features = feature_sets['glycaemic_features']
     if dict_args['model'] in ['neuralJumpModel','resNeuralJumpModel']:
         features['intervention'] = features['intervention'] + features['timevarying'] 
     elif dict_args['model'] in ['IMODE']:

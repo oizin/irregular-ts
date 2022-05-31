@@ -67,9 +67,24 @@ class ODEFunc(nn.Module):
         output = self.layers(hidden)
         return output
 
+class DecayFlow(nn.Module):
+    
+    def __init__(self,input_dim):
+        super().__init__()
+        self.input_dim = input_dim
+        while True:
+            A = torch.randn((input_dim,input_dim))
+            if torch.matrix_rank(A) == input_dim:
+                break
+        B = torch.matmul(A.t(), A)
+        self.A = nn.Parameter(B)
 
-    # def probabilistic_eval_fn():
-    #     pass
+    def forward(self,hidden,dt):
+        At = self.A.unsqueeze(0).repeat_interleave(dt.shape[0],0) * dt.view((-1,1,1))
+        e_At = torch.matrix_exp(-At)
+        output = torch.matmul(e_At,hidden.unsqueeze(2)).squeeze(2)
+        return hidden
+
 
 # GRU flavours -------------------------------------------------------------------------------
 
@@ -77,7 +92,7 @@ class ODEGRUModel(BaseModel):
     def __init__(self,dims,outputNN,ginv,preNN=nn.Identity(),NN0=nn.Identity(),**kwargs):
         func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
         odenet = ct.NeuralODE(func,time_func='tanh',time_dependent=False,data_dependent=False,
-                            solver='euler',solver_options={'step_size':1e-2})
+                            solver='euler',solver_options={'step_size':1e-1})
         odernn = ct.ODEGRUCell(odenet,dims['input_size_update'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,preNN,NN0,dims,ginv,**kwargs)
@@ -97,7 +112,13 @@ class GRUModel(BaseModelAblate):
         super().__init__(rnn,gaussianNN,preNN,NN0,dims,ginv,**kwargs)
         #self.save_hyperparameters({'net':'dtGRUModel'})
 
-
+class DecayGRUModel(BaseModel):
+    def __init__(self,dims,outputNN,ginv,preNN=nn.Identity(),NN0=nn.Identity(),**kwargs):
+        func = DecayFlow(dims['hidden_dim_t'])
+        odenet = ct.NeuralFlow(func)
+        odernn = ct.FlowGRUCell(odenet,dims['input_size_update'],dims['hidden_dim_t'])
+        outNN = outputNN(dims['hidden_dim_t'])
+        super().__init__(odernn,outNN,preNN,NN0,dims,ginv,**kwargs)
 
 
 # class ODELSTMModel(BaseModel):

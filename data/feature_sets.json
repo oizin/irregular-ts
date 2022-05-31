@@ -27,7 +27,10 @@
                                 "weight",
                                 "diabetes_with_cc",
                                 "diabetes_without_cc"],
-                        "counts":["n"]
+                        "counts":["n"],
+                        "features_divider":{"input_hrs":20.0,
+                                           "input_bolus_push":20.0,
+                                           "input_bolus_injection":30.0}
                 },
     "test_features":{
                     "key":"rn",

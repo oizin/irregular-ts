@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from .data_scaler import PreProcessMIMIC,PreProcessSim
 from sklearn.preprocessing import QuantileTransformer,StandardScaler
 import pytorch_lightning as pl
-
+from tqdm import tqdm
 
 def collate_fn_padd(batch):
     '''
@@ -73,7 +73,7 @@ class MIMICDataset(Dataset):
         ids = df[features['id']].unique()
         if verbose:
             print("reconfiguring data...")
-        for id_ in ids:
+        for i,id_ in tqdm(enumerate(ids)):
             if self.pad == -1:
                 df_id = df.loc[df[features['id']] == id_,:]
             else:
@@ -138,9 +138,11 @@ class MIMICDataModule(pl.LightningDataModule):
         df_train = preproc.transform(df_train)
         df_valid = preproc.transform(df_valid)
         df_test = preproc.transform(df_test)
-        self.data_train = MIMICDataset(df_train,self.features,pad=self.max_length,verbose=self.verbose)
-        self.data_valid = MIMICDataset(df_valid,self.features,verbose=self.verbose)
-        self.data_test = MIMICDataset(df_test,self.features,verbose=self.verbose)
+        if stage in (None,"fit"):
+            self.data_train = MIMICDataset(df_train,self.features,pad=self.max_length,verbose=self.verbose)
+            self.data_valid = MIMICDataset(df_valid,self.features,verbose=self.verbose)
+        if stage in (None, "test"):
+            self.data_test = MIMICDataset(df_test,self.features,verbose=self.verbose)
         
     def train_dataloader(self):
         return DataLoader(self.data_train, batch_size=self.batch_size,collate_fn=collate_fn_padd,num_workers=4)

@@ -161,13 +161,13 @@ class BaseModel(pl.LightningModule):
             dt_i = dt[:,i,:]
             if (include_update == True):
                 h_t_update = self.RNN.forward_update(xt_i,h_t)
-                h_t = self.RNN.forward_ode(h_t_update,dt_i,xi_i).squeeze(0)
+                h_t = self.RNN.forward_ode(h_t_update,dt_i,xi_i)
                 h_t_update = F.dropout(h_t_update,training=training,p=p)
                 h_t = F.dropout(h_t,training=training,p=p)
                 output_update[:,i,:] = self.OutputNN(h_t_update)
                 output[:,i,:] = self.OutputNN(h_t)
             else:
-                h_t = self.RNN(xt_i,h_t,dt_i,xi_i).squeeze(0)
+                h_t = self.RNN(xt_i,h_t,dt_i,xi_i)
                 output[:,i,:] = self.OutputNN(h_t)
         if (include_update == True):
             return output,output_update

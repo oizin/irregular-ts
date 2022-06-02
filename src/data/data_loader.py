@@ -108,12 +108,11 @@ class MIMICDataset(Dataset):
         return Xt_list,X0_list,Xi_list,y_list,msk_list,dt_list,msk0_list,seqlen_list,key_list
     
 
-class MIMICDataModule(pl.LightningDataModule):
+class MIMICDataModule():
     def __init__(self, features,df_train,df_test, batch_size = 64, max_length=100, testing = False, verbose = False):
         """
         features a dict
         """
-        super().__init__()
         self.df_train = df_train
         self.df_test = df_test
         self.batch_size = batch_size
@@ -121,8 +120,10 @@ class MIMICDataModule(pl.LightningDataModule):
         self.testing = testing
         self.verbose = verbose
         self.features = features
-
-    def setup(self, stage=None):
+        
+    def setup(self):
+        
+        print("preparing data...")
         df_train = self.df_train
         df_test = self.df_test
 
@@ -132,17 +133,15 @@ class MIMICDataModule(pl.LightningDataModule):
         df_train = df_train.loc[df_train[self.features['id']].isin(train_ids)].copy(deep=True)
 
         # preprocess
-
         preproc = PreProcessMIMIC(self.features,StandardScaler())
         preproc.fit(df_train)
-        df_train = preproc.transform(df_train)
-        df_valid = preproc.transform(df_valid)
-        df_test = preproc.transform(df_test)
-        if stage in (None,"fit"):
-            self.data_train = MIMICDataset(df_train,self.features,pad=self.max_length,verbose=self.verbose)
-            self.data_valid = MIMICDataset(df_valid,self.features,verbose=self.verbose)
-        if stage in (None, "test"):
-            self.data_test = MIMICDataset(df_test,self.features,verbose=self.verbose)
+        self.df_train = preproc.transform(df_train)
+        self.df_valid = preproc.transform(df_valid)
+        self.df_test = preproc.transform(df_test)
+        
+        self.data_train = MIMICDataset(self.df_train,self.features,pad=self.max_length,verbose=self.verbose)
+        self.data_valid = MIMICDataset(self.df_valid,self.features,verbose=self.verbose)
+        self.data_test = MIMICDataset(self.df_test,self.features,verbose=self.verbose)
         
     def train_dataloader(self):
         return DataLoader(self.data_train, batch_size=self.batch_size,collate_fn=collate_fn_padd,num_workers=4)

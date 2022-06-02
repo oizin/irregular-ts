@@ -7,6 +7,7 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from pytorch_lightning.callbacks import ModelCheckpoint
 from argparse import ArgumentParser
 # data related
+import pandas as pd
 from src.data.data_loader import MIMICDataModule
 import json
 from sklearn.model_selection import KFold
@@ -14,15 +15,15 @@ from sklearn.model_selection import train_test_split
 # import models
 from src.models.models import *
 from src.models.output import *
-from src.models.other.catboost import CatboostModel,catboost_feature_engineer
+from src.models.catboost import CatboostModel,catboost_feature_engineer
 import torch
 from catboost import Pool
 # other
 import os
 # plotting
-import pandas as pd
-import matplotlib.pyplot as plt
-from src.plotting.trajectories import *
+
+#import matplotlib.pyplot as plt
+#from src.plotting.trajectories import *
 
 # possible models
 models = {#'ctRNNModel': ctRNNModel, 
@@ -30,11 +31,12 @@ models = {#'ctRNNModel': ctRNNModel,
         ,'ODEGRUModel': ODEGRUModel
         ,'FlowGRUModel': FlowGRUModel
         ,'DecayGRUModel':DecayGRUModel
+        ,'ODELSTMModel':ODELSTMModel
+        ,'FlowLSTMModel':FlowLSTMModel
         #'ODEGRUBayes':ODEGRUBayes, 
-        #'ODELSTMModel':ODELSTMModel,
         #'neuralJumpModel':neuralJumpModel, 
         #'resNeuralJumpModel':resNeuralJumpModel, 
-        #'IMODE':IMODE,
+        ,'IMODE':IMODE
         #'dtRNNModel':RNNModel, 
         ,'GRUModel':GRUModel
         #,'LSTMModel':LSTMModel
@@ -57,12 +59,12 @@ parser = pl.Trainer.add_argparse_args(parser)
 args = parser.parse_args()
 dict_args = vars(args)
 
-def predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,y_full,t_full,nsteps=10,ginv=lambda x: x,xlabel="Time (hours in ICU)",ylabel="Blood glucose (mg/dL)",title=""):
-    preds = model.forward_trajectory(dt_j,(xt_j,x0_j,xi_j),nsteps=nsteps)
-    ts_j = time_trajectories(dt_j.squeeze(0),nsteps+1)
-    mu_tj,sigma_tj = join_trajectories_gaussian(preds)
-    ys_j,t_j = obs_data(xt_j.squeeze(0),y_j,dt_j.squeeze(0))
-    plot_trajectory_dist(t_j,ys_j,ts_j,mu_tj,sigma_tj,y_full,t_full,ginv=ginv,xlabel=xlabel,ylabel=ylabel,sim=False,maxtime=12)
+# def predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,y_full,t_full,nsteps=10,ginv=lambda x: x,xlabel="Time (hours in ICU)",ylabel="Blood glucose (mg/dL)",title=""):
+#     preds = model.forward_trajectory(dt_j,(xt_j,x0_j,xi_j),nsteps=nsteps)
+#     ts_j = time_trajectories(dt_j.squeeze(0),nsteps+1)
+#     mu_tj,sigma_tj = join_trajectories_gaussian(preds)
+#     ys_j,t_j = obs_data(xt_j.squeeze(0),y_j,dt_j.squeeze(0))
+#     plot_trajectory_dist(t_j,ys_j,ts_j,mu_tj,sigma_tj,y_full,t_full,ginv=ginv,xlabel=xlabel,ylabel=ylabel,sim=False,maxtime=12)
 
 def ginv(x):
     x = x.copy()
@@ -80,6 +82,10 @@ def train_test_deeplearner():
 
     mimic = MIMICDataModule(features,df_train,df_test,batch_size=128,testing = False)
     print('setting up data...')
+    mimic.setup()
+    train_dataloader = mimic.train_dataloader()
+    val_dataloader = mimic.val_dataloader()
+    test_dataloader = mimic.test_dataloader()
     #mimic.setup()
     
     # model
@@ -95,25 +101,30 @@ def train_test_deeplearner():
                 update_loss=dict_args['update_loss'],
                 merror=dict_args["merror"])
 
-    # logging
-    
+    # training monitors
     lr_monitor = LearningRateMonitor(logging_interval='step')
     checkpoint_callback = ModelCheckpoint(monitor='val_loss',save_top_k=1)
-
+    early_stopping = EarlyStopping(monitor="val_loss",mode="min",verbose=True,patience=10,min_delta=0.0)
+    
     # train
-    early_stopping = EarlyStopping(monitor="val_loss",mode="min",verbose=True,patience=10,min_delta=0.0)  # mostly defaults
     trainer = pl.Trainer.from_argparse_args(args,
                         logger=logger,
                         val_check_interval=0.5,
                         log_every_n_steps=20,
-                        gradient_clip_val=10.0,
+                        gradient_clip_val=2.0,
                         callbacks=[lr_monitor,early_stopping,checkpoint_callback])
-    trainer.fit(model, mimic)
+    trainer.fit(model, train_dataloader,val_dataloader)
 
     # test
     if dict_args['test'] == True:
         print("testing...")
-        trainer.test(model,mimic,ckpt_path="best")
+        trainer.test(model,test_dataloader,ckpt_path="best")
+        print("predicting...")
+        predictions = trainer.predict(model,test_dataloader,ckpt_path="best")
+        predictions = torch.cat(predictions,dim=0).numpy()
+        df_predictions = pd.DataFrame(predictions,columns=['rn','mu','sigma'])
+        df_predictions['rn'] = df_predictions.rn.astype(int)
+        df_predictions.to_csv(os.path.join(trainer.logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
 def train_test_catboost(df_train,df_test):
     # train data
@@ -137,14 +148,18 @@ def train_test_catboost(df_train,df_test):
     # train 
     model = CatboostModel()
     model.fit(train_pool,eval_set=valid_pool)
-    # evaluate
+    # predict
     preds = model.predict(test_pool)
     preds[:,1] = np.sqrt(preds[:,1])
-    print(preds)
     eval_catboost = model.eval_fn(preds,y_test,ginv)
     print(eval_catboost)
     logger.log_metrics(eval_catboost)
     logger.save()
+    # save predictions
+    df_predictions = df_test.loc[df_test.msk == 0,['rn']]
+    df_predictions.loc[:,'mu'] = preds[:,0]
+    df_predictions.loc[:,'sigma'] = preds[:,1]
+    df_predictions.to_csv(os.path.join(logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
 def import_feature_sets():
     pass
@@ -168,7 +183,7 @@ if __name__ == '__main__':
     dims = {'input_dim_t':len(features['timevarying']),
              'input_dim_0':len(features['static']),
              'input_dim_i':len(features['intervention']),
-             'hidden_dim_t':8,
+             'hidden_dim_t':dict_args['hidden_dim_t'],
              'hidden_dim_0':None,
              'hidden_dim_i':4,
              'input_size_update':len(features['timevarying'])+len(features['static'])}
@@ -177,6 +192,7 @@ if __name__ == '__main__':
     df = pd.read_csv('data/mimic.csv')
     df.sort_values(by=['stay_id','timer'],inplace=True)
     df.reset_index(drop=True,inplace=True)
+    #df = df.iloc[0:1000,]
     
     # splits
     if dict_args['nfolds'] == 1:

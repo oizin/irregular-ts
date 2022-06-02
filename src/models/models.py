@@ -1,7 +1,7 @@
 from .base import BaseModel,BaseModelAblate
 from .output import *
-from .odenet import *
-from .jumpnn import *
+#from .odenet import *
+#from .jumpnn import *
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -85,85 +85,98 @@ class DecayFlow(nn.Module):
         output = torch.matmul(e_At,hidden.unsqueeze(2)).squeeze(2)
         return hidden
 
+class Encoder(nn.Module):
+    def __init__(self,input_dim,hidden_dim,output_dim):
+        super().__init__()
+        
+        self.hidden_dim = hidden_dim
+        self.input_dim = input_dim
+        self.layers = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+            nn.Tanh(),
+        )
+
+    def forward(self,input):
+        output = self.layers(input)
+        return output
 
 # GRU flavours -------------------------------------------------------------------------------
 
 class ODEGRUModel(BaseModel):
-    def __init__(self,dims,outputNN,ginv,preNN=nn.Identity(),NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
         odenet = ct.NeuralODE(func,time_func='tanh',time_dependent=False,data_dependent=False,
                             solver='euler',solver_options={'step_size':1e-1})
-        odernn = ct.ODEGRUCell(odenet,dims['input_size_update'],dims['hidden_dim_t'])
+        odernn = ct.ODEGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,preNN,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
 
 class FlowGRUModel(BaseModel):
-    def __init__(self,dims,outputNN,ginv,preNN=nn.Identity(),NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = ct.ResNetFlow(dims['hidden_dim_t'],50)
         odenet = ct.NeuralFlow(func)
-        odernn = ct.FlowGRUCell(odenet,dims['input_size_update'],dims['hidden_dim_t'])
+        odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,preNN,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
 
 class GRUModel(BaseModelAblate):
-    def __init__(self,dims,outputNN,ginv,preNN=nn.Identity(),NN0=nn.Identity(),**kwargs):
-        rnn = nn.GRUCell(dims['input_size_update'],dims['hidden_dim_t'])
+    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
+        rnn = nn.GRUCell(dims['hidden_dim_t'],dims['hidden_dim_t'])
         gaussianNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(rnn,gaussianNN,preNN,NN0,dims,ginv,**kwargs)
+        super().__init__(rnn,gaussianNN,encoder,NN0,dims,ginv,**kwargs)
         #self.save_hyperparameters({'net':'dtGRUModel'})
 
 class DecayGRUModel(BaseModel):
-    def __init__(self,dims,outputNN,ginv,preNN=nn.Identity(),NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = DecayFlow(dims['hidden_dim_t'])
         odenet = ct.NeuralFlow(func)
-        odernn = ct.FlowGRUCell(odenet,dims['input_size_update'],dims['hidden_dim_t'])
+        odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,preNN,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
 
+# LSTM flavours -------------------------------------------------------------------------------
 
-# class ODELSTMModel(BaseModel):
-
-#     def __init__(self,dims,outputNN,preNN=None,NN0=None,learning_rate=0.1,update_loss=0.1,merror=1e-2,dt_scaler=1.0):
-#         odenet = ODENetHI(dims['hidden_dim_t'],dims['input_dim_i'])
-#         func = Func(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
-#         odernn = ct.ODELSTMCell(func,time_func='tanh',time_dependent=False,data_dependent=False,
-#                                 solver='euler',solver_options={'step_size':1e-2})
-#         outNN = outputNN(dims['hidden_dim_t'])
-#         super().__init__(odernn,outNN,preNN,NN0,dims,learning_rate,update_loss,merror)
-#         #self.save_hyperparameters({'net':'ctLSTMModel'})
-        
-#     def forward(self, dt, x, training = False, p = 0.0, include_update=False):
-#         xt,x0,xi = x
-#         T = xt.size(1)
-#         batch_size = xt.size(0)
-#         output = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
-#         output_update = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
-#         h_t = (torch.zeros(batch_size, self.hidden_dim_t,device=self.device),
-#                torch.zeros(batch_size, self.hidden_dim_t,device=self.device))
-#         z0 = self.NN0(x0)
-#         for i in range(0,T):
-#             xt_i = xt[:,i,:]
-#             xi_i = xi[:,i,:]
-#             xt_i = self.preNN(torch.cat((xt_i,z0),1))
-#             dt_i = dt[:,i,:]
-            
-#             if (include_update == True):
-#                 h_t_update = self.RNN.forward_update(xt_i,h_t)
-#                 o_t_update,c_t = h_t_update[0].squeeze(0),h_t_update[1]
-#                 o_t1 = self.RNN.forward_ode(o_t_update,dt_i,xi_i).squeeze(0)
-#                 output_update[:,i,:] = self.OutputNN(o_t_update)
-#                 output[:,i,:] = self.OutputNN(o_t1)
-#                 h_t = (o_t1,c_t)
-#             else:
-#                 h_t_update = self.RNN.forward_update(xt_i,h_t)
-#                 o_t_update,c_t = h_t_update[0].squeeze(0),h_t_update[1]
-#                 o_t1 = self.RNN.forward_ode(o_t_update,dt_i,xi_i).squeeze(0)
-#                 output[:,i,:] = self.OutputNN(o_t1)
-#                 h_t = (o_t1,c_t)
-#         if (include_update == True):
-#             return output,output_update
-#         else:
-#             return output
+class BaseModelLSTM(BaseModel):
+    # def __init__(self,RNN,OutputNN,preNN,NN0,dims,ginv,**kwargs):
+    #     super().__init__(RNN,OutputNN,preNN,NN0,dims,ginv,**kwargs)
+    
+    def forward(self, dt, x, training = False, p = 0.0, include_update=False):
+        xt,x0,xi = x
+        T = xt.size(1)
+        batch_size = xt.size(0)
+        output = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
+        output_update = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
+        h_t = (torch.zeros(batch_size, self.hidden_dim_t,device=self.device),
+               torch.zeros(batch_size, self.hidden_dim_t,device=self.device))
+        z0 = self.NN0(x0)
+        for i in range(0,T):
+            xt_i = xt[:,i,:]
+            xi_i = xi[:,i,:]
+            xt_i = self.preNN(torch.cat((xt_i,z0),1))
+            dt_i = dt[:,i,:]
+            if (include_update == True):
+                h_t_update = self.RNN.forward_update(xt_i,h_t)
+                o_t_update,c_t = h_t_update[0].squeeze(0),h_t_update[1]
+                o_t1 = self.RNN.forward_ode(o_t_update,dt_i,xi_i).squeeze(0)
+                output_update[:,i,:] = self.OutputNN(o_t_update)
+                output[:,i,:] = self.OutputNN(o_t1)
+                h_t = (o_t1,c_t)
+            else:
+                h_t_update = self.RNN.forward_update(xt_i,h_t)
+                o_t_update,c_t = h_t_update[0].squeeze(0),h_t_update[1]
+                o_t1 = self.RNN.forward_ode(o_t_update,dt_i,xi_i).squeeze(0)
+                output[:,i,:] = self.OutputNN(o_t1)
+                h_t = (o_t1,c_t)
+        if (include_update == True):
+            return output,output_update
+        else:
+            return output
         
 #     def forward_trajectory(self, dt, x, nsteps=10):
 #         xt,x0,xi = x
@@ -187,8 +200,177 @@ class DecayGRUModel(BaseModel):
 #             h_t = (o_t1,c_t)
 #         return outputs
 
+class ODELSTMModel(BaseModelLSTM):
 
+    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
+        func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
+        odenet = ct.NeuralODE(func,time_func='tanh',time_dependent=False,data_dependent=False,
+                            solver='euler',solver_options={'step_size':1e-1})
+        odernn = ct.ODELSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
+        outNN = outputNN(dims['hidden_dim_t'])
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        #self.save_hyperparameters({'net':'ctLSTMModel'})
+                
+class FlowLSTMModel(BaseModelLSTM):
 
+    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
+        func = ct.ResNetFlow(dims['hidden_dim_t'],50)
+        odenet = ct.NeuralFlow(func)
+        odernn = ct.FlowLSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
+        outNN = outputNN(dims['hidden_dim_t'])
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        #self.save_hyperparameters({'net':'ctLSTMModel'})
+        
+# IMODE model -----------------------------------------------------------------------------------------
+
+class IMODE_ODENet(nn.Module):
+    def __init__(self,dims):
+        super().__init__()
+        
+        # dimensions
+        hx_dim,hi_dim = dims['hidden_dim_t'],dims['hidden_dim_i']
+        self.hx_dim = hx_dim
+        self.hi_dim = hi_dim
+        
+        # neural nets
+        self.hx_net = nn.Sequential(
+            nn.Linear(hx_dim + hi_dim, (hx_dim + hi_dim)*2),
+            nn.Dropout(p=0.2),
+            nn.Tanh(),
+            nn.Linear((hx_dim + hi_dim)*2, hx_dim),
+            nn.Tanh(),
+        )
+        self.hi_net = nn.Sequential(
+            nn.Linear(hi_dim, (hi_dim)*2),
+            nn.Dropout(p=0.2),
+            nn.Tanh(),
+            nn.Linear((hi_dim)*2, hi_dim),
+            nn.Tanh(),
+        )
+        
+        # initial parameters
+        for m in self.hx_net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.bias, val=0)
+        for m in self.hi_net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.bias, val=0)
+
+    def forward(self,hidden):
+        h_i = hidden[:,(self.hx_dim):(self.hx_dim+self.hi_dim)]
+        h_x = self.hx_net(hidden)
+        h_i = self.hi_net(h_i)
+        h_all = torch.cat((h_x,h_i),1)
+        return h_all
+
+class IMODE_UpdateNN(nn.Module):
+    def __init__(self,dims):
+        super().__init__()
+        
+        # dimensions
+        self.hx_dim = dims['hidden_dim_t']
+        self.hi_dim = dims['hidden_dim_i']
+        self.x_input = dims['input_dim_t'] + dims['input_dim_0']
+        self.i_input = dims['input_dim_i']
+        
+        # neural nets
+        self.hx_net = nn.Sequential(
+            nn.Linear(self.hx_dim + self.x_input, (self.hx_dim + self.x_input)*2),
+            nn.Dropout(p=0.2),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Linear((self.hx_dim + self.x_input)*2, self.hx_dim),
+            nn.Tanh(),
+        )
+        self.hi_net = nn.Sequential(
+            nn.Linear(self.hi_dim + self.hx_dim + self.i_input, (self.hi_dim + self.hx_dim + self.i_input)*2),
+            nn.Dropout(p=0.2),
+            nn.LeakyReLU(negative_slope=0.1),
+            nn.Linear((self.hi_dim + self.hx_dim + self.i_input)*2, self.hi_dim),
+            nn.Tanh(),
+        )
+        
+    def forward(self,input,hidden):
+        xt,xi = input
+        h_x = hidden[:,0:(self.hx_dim)]
+        h_i = hidden[:,(self.hx_dim):(self.hx_dim+self.hi_dim)]
+        h_x = self.hx_net(torch.cat((h_x,xt),1))
+        h_i = self.hi_net(torch.cat((h_x,h_i,xi),1))
+        h_all = torch.cat((h_x,h_i),1)
+        return h_all
+
+class IMODE(BaseModel):
+    
+    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+        # input_dim_t = dims['input_dim_t']
+        # input_dim_i = dims['input_dim_i']
+        # input_dim_0 = dims['input_dim_0']
+
+        self.hidden_dim_t = dims['hidden_dim_t']
+        self.hidden_dim_0 = dims['hidden_dim_0']
+        self.hidden_dim_x = dims['hidden_dim_t']
+        self.hidden_dim_i = dims['hidden_dim_i']
+        
+        func = IMODE_ODENet(dims)
+        odenet = ct.NeuralODE(func,time_func='tanh',
+                            solver='euler',solver_options={'step_size':1e-1})
+        jumpnn = IMODE_UpdateNN(dims)
+        odernn = ct.neuralJumpODECell(jumpnn,odenet)
+        gaussianNN = outputNN(self.hidden_dim_t)
+        super().__init__(odernn,gaussianNN,nn.Identity(),NN0,dims,ginv,**kwargs)
+        #self.save_hyperparameters({'net':'IMODE'})
+        
+    def forward(self, dt, x, training = False, p = 0.0, include_update=False):
+        """
+        x a tuple
+        """
+        xt,x0,xi = x
+        T = xt.size(1)
+        batch_size = xt.size(0)
+        output = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
+        output_update = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
+        h_t = torch.zeros(batch_size, self.hidden_dim_x+self.hidden_dim_i,device=self.device)
+        z0 = self.NN0(x0)
+        for i in range(0,T):
+            xt_i = xt[:,i,:]
+            xt_i = self.preNN(torch.cat((xt_i,z0),1))
+            dt_i = dt[:,i,:]
+            if (include_update == True):
+                h_t_update = self.RNN.forward_update((xt_i,xi[:,i,:]),h_t)
+                h_t = self.RNN.forward_ode(h_t_update,dt_i)
+                output_update[:,i,:] = self.OutputNN(h_t_update[:,0:self.hidden_dim_x])
+                output[:,i,:] = self.OutputNN(h_t[:,0:self.hidden_dim_x])
+            else:
+                h_t = self.RNN((xt_i,xi[:,i,:]),h_t,dt_i)
+                output[:,i,:] = self.OutputNN(h_t[:,0:self.hidden_dim_x])
+        if (include_update == True):
+            return output,output_update
+        else:
+            return output
+        
+#     def forward_trajectory(self, dt, x, nsteps=10):
+#         xt,x0,xi = x
+#         T = xt.size(1)
+#         batch_size = xt.size(0)
+#         outputs = []
+#         h_t = torch.zeros(batch_size, self.hidden_dim_x+self.hidden_dim_i,device=self.device)
+#         if (self.NN0 != None):
+#             z0 = self.NN0(x0)
+#         for i in range(0,T):
+#             xt_i = xt[:,i,:]
+#             if (self.NN0 != None) & (self.preNN != None):
+#                 xt_i = self.preNN(torch.cat((xt_i,z0),1))
+#             elif (self.preNN != None):
+#                 xt_i = self.preNN(xt_i)
+#             dt_i = dt[:,i,:]
+#             h_t = self.RNN((xt_i,xi[:,i,:]),h_t,dt_i,n_intermediate=nsteps).squeeze(0)
+#             outputs_i = self.OutputNN(h_t[:,:,0:self.hidden_dim_x])
+#             outputs.append(outputs_i)
+#             h_t = h_t[-1]
+#         return outputs
 
 
 
@@ -376,82 +558,6 @@ class DecayGRUModel(BaseModel):
 # #             h_t = self.RNN(xt,h_t,dt,xi).squeeze(0)
 # #             return self.OutputNN(h_t)
             
-# class IMODE(BaseModel):
-    
-#     def __init__(self,input_dims,hidden_dims,outputNN,preNN=None,NN0=None,learning_rate=0.1,update_loss=0.1,merror=1e-2,dt_scaler=1.0):
-#         input_dim_t = input_dims['input_dim_t']
-#         input_dim_i = input_dims['input_dim_i']
-#         input_dim_0 = input_dims['input_dim_0']
-#         if preNN is None:
-#             input_dims = input_dims
-#         else:
-#             input_dims['input_dim_t'] = hidden_dims['hidden_dim_t']
-
-#         self.hidden_dim_t = hidden_dims['hidden_dim_t']
-#         hidden_dim_0 = hidden_dims['hidden_dim_0']
-#         self.hidden_dim_x = hidden_dims['hidden_dim_t']
-#         self.hidden_dim_i = hidden_dims['hidden_dim_i']
-        
-#         odenet = IMODE_ODENet(hidden_dims,input_dims)
-#         jumpnn = IMODE_JumpNN(hidden_dims,input_dims)
-#         ctjumpnn = torchctrnn.neuralJumpODECell(jumpnn,odenet,None,tol={'atol':1e-2,'rtol':1e-2},method='euler',options={'step_size':0.1},dt_scaler=dt_scaler)
-#         gaussianNN = outputNN(self.hidden_dim_t,g=g,ginv=ginv)
-#         super().__init__(ctjumpnn,gaussianNN,preNN,NN0,hidden_dims,input_dims,learning_rate,update_loss,merror)
-#         self.save_hyperparameters({'net':'IMODE'})
-        
-#     def forward(self, dt, x, training = False, p = 0.0, include_update=False):
-#         """
-#         x a tuple
-#         """
-#         xt,x0,xi = x
-#         T = xt.size(1)
-#         batch_size = xt.size(0)
-#         output = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
-#         output_update = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
-#         h_t = torch.zeros(batch_size, self.hidden_dim_x+self.hidden_dim_i,device=self.device)
-#         if (self.NN0 != None):
-#             z0 = self.NN0(x0)
-#         for i in range(0,T):
-#             xt_i = xt[:,i,:]
-#             if (self.NN0 != None) & (self.preNN != None):
-#                 xt_i = self.preNN(torch.cat((xt_i,z0),1))
-#             elif (self.preNN != None):
-#                 xt_i = self.preNN(xt_i)
-#             dt_i = dt[:,i,:]
-            
-#             if (include_update == True):
-#                 h_t_update = self.RNN.forward_update((xt_i,xi[:,i,:]),h_t)
-#                 h_t = self.RNN.forward_ode(h_t_update,dt_i).squeeze(0)
-#                 output_update[:,i,:] = self.OutputNN(h_t_update[:,0:self.hidden_dim_x])
-#                 output[:,i,:] = self.OutputNN(h_t[:,0:self.hidden_dim_x])
-#             else:
-#                 h_t = self.RNN((xt_i,xi[:,i,:]),h_t,dt_i).squeeze(0)
-#                 output[:,i,:] = self.OutputNN(h_t[:,0:self.hidden_dim_x])
-#         if (include_update == True):
-#             return output,output_update
-#         else:
-#             return output
-        
-#     def forward_trajectory(self, dt, x, nsteps=10):
-#         xt,x0,xi = x
-#         T = xt.size(1)
-#         batch_size = xt.size(0)
-#         outputs = []
-#         h_t = torch.zeros(batch_size, self.hidden_dim_x+self.hidden_dim_i,device=self.device)
-#         if (self.NN0 != None):
-#             z0 = self.NN0(x0)
-#         for i in range(0,T):
-#             xt_i = xt[:,i,:]
-#             if (self.NN0 != None) & (self.preNN != None):
-#                 xt_i = self.preNN(torch.cat((xt_i,z0),1))
-#             elif (self.preNN != None):
-#                 xt_i = self.preNN(xt_i)
-#             dt_i = dt[:,i,:]
-#             h_t = self.RNN((xt_i,xi[:,i,:]),h_t,dt_i,n_intermediate=nsteps).squeeze(0)
-#             outputs_i = self.OutputNN(h_t[:,:,0:self.hidden_dim_x])
-#             outputs.append(outputs_i)
-#             h_t = h_t[-1]
-#         return outputs
 
 # # class dtRNNModel(BaseModelDT):
 

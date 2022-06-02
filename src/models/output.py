@@ -24,7 +24,6 @@ class GaussianOutputNNBase(nn.Module):
             nn.Dropout(0.2),
             nn.Tanh(),
             nn.Linear(hidden_dim//2, 1),
-            nn.Softplus(),
         )
     
     def forward(self,x):
@@ -32,7 +31,7 @@ class GaussianOutputNNBase(nn.Module):
         x of dimension ()
         """
         mu_out = self.mu_net(x)
-        sigma_out = self.sigma_net(x)
+        sigma_out = torch.exp(self.sigma_net(x))
         return torch.cat((mu_out,sigma_out),1)
     
 

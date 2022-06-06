@@ -1,5 +1,5 @@
 {
-    "glycaemic_features":{
+    "mimic":{"features":{
                         "key":"rn",
                         "id":"stay_id",
                         "target":"glc_next",
@@ -45,4 +45,18 @@
                     "counts":["n"],
                     "features_divider":{"input_hrs":20.0}
                 }
+        },
+        "simulation":{"features":{
+                        "key":"rn",
+                        "id":"id",
+                        "target":"glucose_t_obs_next",
+                        "time_vars":["t","t1"],
+                        "target_mask":"msk",
+                        "timevarying":["glucose_t"],
+                        "intervention":["insulin_t","dextrose_t"],
+                        "static":[],
+                        "counts":["n"],
+                        "features_divider":{"insulin_t":1.0,"dextrose_t":2.0}
+        }
+}
 }

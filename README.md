@@ -37,7 +37,9 @@ The final output of that project is downloaded via analysis_dataset.ipynb
     
 Install from Github as follows:
         
-pip install --upgrade https://github.com/oizin/torchctrnn/tarball/main
+pip install https://github.com/oizin/torchctrnn/tarball/main
+
+NOTE: add an irregular-ts branch to torchctrnn!
     
 ### Using the code
     

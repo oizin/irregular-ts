@@ -93,7 +93,7 @@ class Encoder(nn.Module):
         self.input_dim = input_dim
         self.layers = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
+            nn.Tanh(),
             nn.Linear(hidden_dim, output_dim),
             nn.Tanh(),
         )
@@ -105,42 +105,42 @@ class Encoder(nn.Module):
 # GRU flavours -------------------------------------------------------------------------------
 
 class ODEGRUModel(BaseModel):
-    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
         odenet = ct.NeuralODE(func,time_func='tanh',time_dependent=False,data_dependent=False,
                             solver='euler',solver_options={'step_size':1e-1})
         odernn = ct.ODEGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'ODEGRUModel'})
 
 class FlowGRUModel(BaseModel):
-    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
-        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
-        func = ct.ResNetFlow(dims['hidden_dim_t'],50)
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
+        encoder = Encoder(dims['input_size_update'],12,dims['hidden_dim_t'])
+        func = ct.ResNetFlow(dims['hidden_dim_t'],12)
         odenet = ct.NeuralFlow(func)
         odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'FlowGRUModel'})
 
 class GRUModel(BaseModelAblate):
-    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
-        rnn = nn.GRUCell(dims['hidden_dim_t'],dims['hidden_dim_t'])
-        gaussianNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(rnn,gaussianNN,encoder,NN0,dims,ginv,**kwargs)
+        rnn = nn.RNNCell(dims['hidden_dim_t'],dims['hidden_dim_t'])
+        outNN = outputNN(dims['hidden_dim_t'])
+        super().__init__(rnn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'GRUModel'})
 
 class DecayGRUModel(BaseModel):
-    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = DecayFlow(dims['hidden_dim_t'])
         odenet = ct.NeuralFlow(func)
         odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'DecayGRUModel'})
 
 # LSTM flavours -------------------------------------------------------------------------------
@@ -205,25 +205,25 @@ class BaseModelLSTM(BaseModel):
 
 class ODELSTMModel(BaseModelLSTM):
 
-    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
         odenet = ct.NeuralODE(func,time_func='tanh',time_dependent=False,data_dependent=False,
                             solver='euler',solver_options={'step_size':1e-1})
         odernn = ct.ODELSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'ODELSTMModel'})
                 
 class FlowLSTMModel(BaseModelLSTM):
 
-    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = ct.ResNetFlow(dims['hidden_dim_t'],50)
         odenet = ct.NeuralFlow(func)
         odernn = ct.FlowLSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
-        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'FlowLSTMModel'})
         
 # IMODE model -----------------------------------------------------------------------------------------
@@ -307,7 +307,7 @@ class IMODE_UpdateNN(nn.Module):
 
 class IMODE(BaseModel):
     
-    def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         # input_dim_t = dims['input_dim_t']
         # input_dim_i = dims['input_dim_i']
         # input_dim_0 = dims['input_dim_0']
@@ -323,7 +323,7 @@ class IMODE(BaseModel):
         jumpnn = IMODE_UpdateNN(dims)
         odernn = ct.neuralJumpODECell(jumpnn,odenet)
         gaussianNN = outputNN(self.hidden_dim_t)
-        super().__init__(odernn,gaussianNN,nn.Identity(),NN0,dims,ginv,**kwargs)
+        super().__init__(odernn,gaussianNN,nn.Identity(),NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'IMODE'})
         
     def forward(self, dt, x, training = False, p = 0.0, include_update=False):
@@ -376,7 +376,9 @@ class IMODE(BaseModel):
 #         return outputs
 
 
+# Feedforward models -------------------------------------------------------------------------------
 
+# class MLP(BaseModel):
 
 
 

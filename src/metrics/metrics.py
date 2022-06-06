@@ -1,9 +1,9 @@
 import numpy as np
 import scipy
 import properscoring as ps 
-import torch
 
-def probabilistic_eval_fn(pred,y,ginv = lambda x: x,alpha=0.05):
+## P(Y|X) where P is a Guassian evaluation function ##
+def gaussian_eval_fn(pred,y,ginv = lambda x: x,alpha=0.05):
     """
     Evaluate a probabilistic prediction across multiple metrics.
     Assumes the predicted distribution is Gaussian.
@@ -31,20 +31,36 @@ def probabilistic_eval_fn(pred,y,ginv = lambda x: x,alpha=0.05):
     int_coverage = sum((lower < yinv) & (upper > yinv))/yinv.shape[0]
     int_av_width = np.mean(upper - lower)
     int_med_width = np.median(upper - lower)
+    rmse = np.sqrt(np.mean((ginv(m) - ginv(y))**2))
     return {'crps_mean':crps_mean,
             'ig_mean':ig_mean,
             'int_score_mean':int_score_mean,
             'var_pit':var_pit,
             'int_coverage':int_coverage,
             'int_av_width':int_av_width,
-            'int_med_width':int_med_width}
+            'int_med_width':int_med_width,
+            'rmse':rmse}
 
-def sse_fn(pred,y,ginv=lambda x: x):
+## E(Y|X) evaluation function ##
+def conditional_eval_fn(pred,y,ginv = lambda x: x,alpha=0.05):
     """
-    Method for calculation of the sum of squared errors
+    Evaluate a conditional expectation prediction across multiple metrics.
+
+    Args:
+        pred: the predicted value - a 1D numpy array
+        y: the observed outcome - a 1D numpy array
+        ginv: a transform to apply to y (and any quantiles constructed from the predictions) prior to evaluation
     """
-    # log probs
-    m,s = pred[:,0],pred[:,1]
-    mse = torch.tensor(np.sum((ginv(m.cpu().numpy()) - ginv(y.cpu().numpy()))**2))
-    return mse
+    m = pred
+    rmse = np.sqrt(np.mean((ginv(m) - ginv(y))**2))
+    return {'rmse':rmse}
+
+# def sse_fn(pred,y,ginv=lambda x: x):
+#     """
+#     Method for calculation of the sum of squared errors
+#     """
+#     # log probs
+#     m,s = pred[:,0],pred[:,1]
+#     mse = torch.tensor(np.sum((ginv(m.cpu().numpy()) - ginv(y.cpu().numpy()))**2))
+#     return mse
 

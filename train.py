@@ -1,10 +1,10 @@
+## libraries ##
 # use lightning framework
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 from pytorch_lightning.loggers import CSVLogger
-from pytorch_lightning.callbacks import LearningRateMonitor
+from pytorch_lightning.callbacks import LearningRateMonitor,ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.callbacks import ModelCheckpoint
 from argparse import ArgumentParser
 # data related
 import pandas as pd
@@ -18,14 +18,15 @@ from src.models.output import *
 from src.models.catboost import CatboostModel,catboost_feature_engineer
 import torch
 from catboost import Pool
+# evaluation
+import src.metrics.metrics as metrics
 # other
 import os
 # plotting
-
 #import matplotlib.pyplot as plt
 #from src.plotting.trajectories import *
 
-# possible models
+## possible models ##
 models = {#'ctRNNModel': ctRNNModel, 
         'CatboostModel': CatboostModel
         ,'ODEGRUModel': ODEGRUModel
@@ -42,22 +43,39 @@ models = {#'ctRNNModel': ctRNNModel,
         #,'LSTMModel':LSTMModel
         }
 
-# cmd args
+## cmd args ##
 parser = ArgumentParser()
-parser.add_argument('--model', dest='model',choices=list(models.keys()),type=str)
-parser.add_argument('--seed', dest='seed',default=42,type=int)
-parser.add_argument('--lr', dest='lr',default=0.01,type=float)
-parser.add_argument('--test', dest='test',default=False,type=bool)
+# general housingkeeping;
+parser.add_argument('--seed', dest='seed',default=76,type=int)
 parser.add_argument('--logfolder', dest='logfolder',default='default',type=str)
-parser.add_argument('--update_loss', dest='update_loss',default=0.001,type=float)
-#parser.add_argument('--loss', dest='loss',default="LL",type=str)
-parser.add_argument('--merror', dest='merror',default=0.01,type=float)
 parser.add_argument('--nfolds', dest='nfolds',default=1,type=int)
-parser.add_argument('--plot', dest='plot',default=True,type=bool)
+parser.add_argument('--test', action='store_true')
+parser.add_argument('--no-test', dest='test', action='store_false')
+parser.set_defaults(test=True)
+parser.add_argument('--features', dest='features',default='features',type=str)
+parser.add_argument('--small_data', action='store_true')
+parser.add_argument('--no-small_data', dest='small_data', action='store_false')
+parser.set_defaults(store_true=False)
+
+# which experiment are we running:
+parser.add_argument('--data', dest='data',default='mimic',type=str)
+parser.add_argument('--task',dest='task',
+                choices=['conditional_expectation','gaussian','categorical'],
+                default='gaussian',
+                type=str)
+
+# which model to use:
+parser.add_argument('--model', dest='model',choices=list(models.keys()),type=str)
+parser.add_argument('--lr', dest='lr',default=0.01,type=float)
+parser.add_argument('--update_mixing', dest='update_mixing',default=0.001,type=float)
+parser.add_argument('--merror', dest='merror',default=0.01,type=float)
+parser.add_argument('--niter', dest='niter',default=10000,type=int)
+
+#parser.add_argument('--loss', dest='loss',default="LL",type=str)
+#parser.add_argument('--plot', dest='plot',default=True,type=bool)
 parser = BaseModel.add_model_specific_args(parser)
 parser = pl.Trainer.add_argparse_args(parser)
 args = parser.parse_args()
-dict_args = vars(args)
 
 # def predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,y_full,t_full,nsteps=10,ginv=lambda x: x,xlabel="Time (hours in ICU)",ylabel="Blood glucose (mg/dL)",title=""):
 #     preds = model.forward_trajectory(dt_j,(xt_j,x0_j,xi_j),nsteps=nsteps)
@@ -76,58 +94,81 @@ def g(x):
     x = np.log(x) - np.log(140)
     return x
 
-logger = CSVLogger("experiments/mimic",name=dict_args['logfolder'])
+## logger ##
+logger = CSVLogger("experiments/mimic",name=args.logfolder)
 
-def train_test_deeplearner():
+## deep learning trainer ##
+def train_test_deeplearner(df_train,df_test,features,task='gaussian',test=True):
+    """"
+    Function for training and testing a deep learning model given training and test data
+    """
 
+    # setup the data
     mimic = MIMICDataModule(features,df_train,df_test,batch_size=128,testing = False)
     print('setting up data...')
     mimic.setup()
     train_dataloader = mimic.train_dataloader()
     val_dataloader = mimic.val_dataloader()
     test_dataloader = mimic.test_dataloader()
-    #mimic.setup()
     
-    # model
-    outputNN = GaussianOutputNNKL
-    model = models[dict_args['model']]
+    # match model output layers with task:
+    if task == 'gaussian':
+        outputNN = GaussianOutputNNKL
+        eval_fn = metrics.gaussian_eval_fn
+    elif task == 'conditional_expectation':
+        outputNN = ConditionalExpectNN
+        eval_fn = metrics.conditional_eval_fn
+    elif task == 'categorical':
+        outputNN = BinnedOutputNN
+        eval_fn = metrics.categorical_eval_fn
+
+    # setup the model
+    model = models[args.model]
     model = model(dims,
                 outputNN,
                 ginv,
-                learning_rate=dict_args['lr'],
-                update_loss=dict_args['update_loss'],
-                merror=dict_args["merror"])
+                eval_fn,
+                learning_rate=args.lr,
+                update_mixing=args.update_mixing,
+                merror=args.merror)
 
     # training monitors
     lr_monitor = LearningRateMonitor(logging_interval='step')
     checkpoint_callback = ModelCheckpoint(monitor='val_loss',save_top_k=1)
-    early_stopping = EarlyStopping(monitor="val_loss",mode="min",verbose=True,patience=10,min_delta=0.0)
+    early_stopping = EarlyStopping(monitor="val_loss",mode="min",verbose=True,patience=20,min_delta=0.0)
     
-    # train
+    # pytorch lightning trainer
     trainer = pl.Trainer.from_argparse_args(args,
                         logger=logger,
                         val_check_interval=0.5,
                         log_every_n_steps=20,
-                        gradient_clip_val=2.0,
+                        auto_lr_find=True,
+                        gradient_clip_val=1.0,
                         callbacks=[lr_monitor,early_stopping,checkpoint_callback])
     trainer.fit(model, train_dataloader,val_dataloader)
 
-    # test
-    if dict_args['test'] == True:
+    # test model
+    if test:
         print("testing...")
         trainer.test(model,test_dataloader,ckpt_path="best")
         print("predicting...")
         predictions = trainer.predict(model,test_dataloader,ckpt_path="best")
         predictions = torch.cat(predictions,dim=0).numpy()
-        df_predictions = pd.DataFrame(predictions,columns=['rn','mu','sigma'])
+        if task == "gaussian": 
+            df_predictions = pd.DataFrame(predictions,columns=['rn','mu','sigma'])
+        elif task == "conditional_expectation":
+            df_predictions = pd.DataFrame(predictions,columns=['rn','mu'])
         df_predictions['rn'] = df_predictions.rn.astype(int)
-        df_predictions['model'] = dict_args['model']
+        df_predictions['model'] = args.model
         df_predictions.to_csv(os.path.join(trainer.logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
-def train_test_catboost(df_train,df_test):
+## catboost trainer ##
+def train_test_catboost(df_train,df_test,features,task='gaussian',test=True,niter=10000):
+    ## setup data ##
     # train data
     df_train,cat_vars = catboost_feature_engineer(df_train,features)
     input_features = cat_vars + features['timevarying'] + features['static'] + features['counts'] + features['time_vars']
+    print(input_features)
     # train-validation split
     train_ids, valid_ids = train_test_split(df_train[features['id']].unique(),test_size=0.1)
     df_valid = df_train.loc[df_train[features['id']].isin(valid_ids)].copy()
@@ -143,118 +184,107 @@ def train_test_catboost(df_train,df_test):
     X_test = df_test.loc[df_test.msk == 0,input_features].to_numpy()
     y_test = g(df_test.loc[df_test.msk == 0,features['target']].to_numpy())
     test_pool = Pool(X_test) 
-    # train 
-    model = CatboostModel()
+    ## setup model ##
+    if task == 'gaussian':
+        eval_fn = metrics.gaussian_eval_fn
+    elif task == 'conditional_expectation':
+        eval_fn = metrics.conditional_eval_fn
+    elif task == 'categorical':
+        eval_fn = metrics.categorical_eval_fn
+    model = CatboostModel(niter,task,eval_fn)
+    ## train model ##
     model.fit(train_pool,eval_set=valid_pool)
-    # predict
-    preds = model.predict(test_pool)
-    preds[:,1] = np.sqrt(preds[:,1])
-    eval_catboost = model.eval_fn(preds,y_test,ginv)
-    print(eval_catboost)
-    logger.log_metrics(eval_catboost)
-    logger.save()
-    # save predictions
-    df_predictions = df_test.loc[df_test.msk == 0,['rn']]
-    df_predictions.loc[:,'mu'] = preds[:,0]
-    df_predictions.loc[:,'sigma'] = preds[:,1]
-    df_predictions['model'] = 'Catboost'
-    df_predictions.to_csv(os.path.join(logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
+    ## test model ##
+    if test:
+        preds = model.predict(test_pool)
+        if task == "gaussian": 
+            preds[:,1] = np.sqrt(preds[:,1])
+        eval_catboost = model.eval_fn(preds,y_test,ginv)
+        print(eval_catboost)
+        logger.log_metrics(eval_catboost)
+        logger.save()
+        # save predictions
+        df_predictions = df_test.loc[df_test.msk == 0,['rn']]
+        if task == "gaussian": 
+            df_predictions.loc[:,'mu'] = preds[:,0]
+            df_predictions.loc[:,'sigma'] = preds[:,1]
+        elif task == "conditional_expectation":
+            df_predictions.loc[:,'mu'] = preds
+        df_predictions['model'] = 'Catboost'
+        df_predictions.to_csv(os.path.join(logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
 def import_feature_sets():
     pass
 
+## run program ##
 if __name__ == '__main__':
 
-    # seed
-    seed_everything(dict_args['seed'], workers=True)
+    ## print some information ##
+    print('Training model {} for task {} on dataset {}.'.format(args.model,args.task,args.data))
+    print('Train/eval will use {} fold validation (where 1 indicates a single train/test split)'.format(args.nfolds))
+    print('The full dataset is being used: {}'.format(~args.small_data))
 
-    # data
-    # features
-    #input_features = all_features_treat_dict()
+    ## seed ##
+    seed_everything(args.seed, workers=True)
+
+    ## features ##
     with open('data/feature_sets.json', 'r') as f:
         feature_sets = json.load(f)
-    features = feature_sets['glycaemic_features']
-    if dict_args['model'] in ['neuralJumpModel','resNeuralJumpModel']:
+    features = feature_sets[args.data.split('_')[0]][args.features]
+    if args.model in ['neuralJumpModel','resNeuralJumpModel']:
         features['intervention'] = features['intervention'] + features['timevarying'] 
-    elif dict_args['model'] in ['IMODE']:
+    elif args.model in ['IMODE']:
         features['timevarying'] = [t for t in features['timevarying'] if t in features['timevarying'] and t not in features['intervention']]
-    # dimensions
-    dims = {'input_dim_t':len(features['timevarying']),
+    
+    ## dimensions - for NNs ##
+    dims = {'input_dim_t':len(features['timevarying']) + len(features['counts']),
              'input_dim_0':len(features['static']),
              'input_dim_i':len(features['intervention']),
-             'hidden_dim_t':dict_args['hidden_dim_t'],
+             'hidden_dim_t':args.hidden_dim_t,
              'hidden_dim_0':None,
              'hidden_dim_i':4,
-             'input_size_update':len(features['timevarying'])+len(features['static'])}
+             'input_size_update':len(features['timevarying'])+len(features['static'])+len(features['counts'])}
     print(dims)
-    # import
-    df = pd.read_csv('data/mimic.csv')
-    df.sort_values(by=['stay_id','timer'],inplace=True)
-    df.reset_index(drop=True,inplace=True)
-    #df = df.iloc[0:1000,]
-    
-    # splits
-    if dict_args['nfolds'] == 1:
-        splits = [train_test_split(df.stay_id.unique(),test_size=0.2)]
-    else:
-        kf = KFold(n_splits=dict_args['nfolds'])
-        splits = kf.split(df.stay_id.unique())
 
+    ## data import ##
+    df = pd.read_csv('data/'+ args.data +'.csv')
+    df.sort_values(by=[features['id'],features['time_vars'][0]],inplace=True)
+    if args.data.split('_')[0] == 'simulation':
+        # only use "oberved data" in the simulation
+        df = df.loc[(df.obs == True) & ~(df.glucose_t_obs_next.isnull()),:] 
+        print(df)
+    df.reset_index(drop=True,inplace=True)
+    if args.small_data:
+        df = df.iloc[0:8000,]
+    
+    ## split data into train/test ##
+    if args.nfolds == 1:
+        splits = [train_test_split(df[features['id']].unique(),test_size=0.2)]
+    else:
+        kf = KFold(n_splits=args.nfolds)
+        splits = kf.split(df[features['id']].unique())
+
+    ## train/test loop ##
     for i,(train_ids, test_ids) in enumerate(splits):
         print('fold:',i)
-        if dict_args['nfolds'] == 1:
-            df_test = df.loc[df.stay_id.isin(test_ids)].copy()
-            df_train = df.loc[df.stay_id.isin(train_ids)].copy()
+        if args.nfolds == 1:
+            df_test = df.loc[df[features['id']].isin(test_ids)].copy()
+            df_train = df.loc[df[features['id']].isin(train_ids)].copy()
         else:
-            ids_ = df.stay_id.unique()
-            df_test = df.loc[df.stay_id.isin(ids_[test_ids])].copy()
-            df_train = df.loc[df.stay_id.isin(ids_[train_ids])].copy()
+            ids_ = df[features['id']].unique()
+            df_test = df.loc[df[features['id']].isin(ids_[test_ids])].copy()
+            df_train = df.loc[df[features['id']].isin(ids_[train_ids])].copy()
+        print('Data size: train {}; test {}'.format(df_train.shape[0],df_test.shape[0]))
 
-        if dict_args['model'] in ['CatboostModel']:
-            train_test_catboost(df_train,df_test)
+        ## run model train/test ##
+        if args.model in ['CatboostModel']:
+            train_test_catboost(df_train,df_test,features,args.task,args.test,args.niter)
         else:
-            train_test_deeplearner()
-        # mimic = MIMICDataModule(features,df_train,df_test,batch_size=128,testing = True)
-        # print('setting up data...')
-        # mimic.setup()
-        
-        # # model
-        # if dict_args['loss'] == "KL":
-        #     outputNN = GaussianOutputNNKL
-        # else:
-        #     outputNN = GaussianOutputNNLL
-        # model = models[dict_args['model']]
-        # # NN0 = nn.Identity()
-        # # preNN = nn.Identity()
-        # model = model(dims,
-        #             outputNN,
-        #             ginv,
-        #             learning_rate=dict_args['lr'],
-        #             update_loss=dict_args['update_loss'],
-        #             merror=dict_args["merror"])
-
-        # # logging
-        # logger = CSVLogger("experiments/mimic",name=dict_args['logfolder'])
-        # lr_monitor = LearningRateMonitor(logging_interval='step')
-        # checkpoint_callback = ModelCheckpoint(monitor='val_loss',save_top_k=1)
-
-        # # train
-        # early_stopping = EarlyStopping(monitor="val_loss",mode="min",verbose=True,patience=10,min_delta=0.0)  # mostly defaults
-        # trainer = pl.Trainer.from_argparse_args(args,
-        #                     logger=logger,
-        #                     val_check_interval=1.0,
-        #                     log_every_n_steps=20,
-        #                     gradient_clip_val=2.0,
-        #                     callbacks=[lr_monitor,early_stopping,checkpoint_callback])
-        # trainer.fit(model, mimic)
-
-        # # test
-        # if dict_args['test'] == True:
-        #     trainer.test(model,mimic,ckpt_path="best")
+            train_test_deeplearner(df_train,df_test,features,args.task,args.test)
             
         # # plot some examples
-        # if dict_args['plot'] == True:
-        #     if not dict_args['model'] in ['dtRNNModel','dtGRUModel','dtLSTMModel']:
+        # if args.plot == True:
+        #     if not args.model in ['dtRNNModel','dtGRUModel','dtLSTMModel']:
         #             dl_test = mimic.val_dataloader()
         #             xt, x0, xi, y, msk, dt, _, id = next(iter(dl_test))
         #             ids = [id_.item() for id_ in id]

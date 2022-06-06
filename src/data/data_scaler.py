@@ -27,7 +27,8 @@ class PreProcessMIMIC():
         self.features_autoreg_scaler = features_autoreg_scaler
         
     def fit(self,df):
-        self.scaler.fit(df.loc[:,self.features_scaler])
+        if len(self.features_scaler) > 0:
+            self.scaler.fit(df.loc[:,self.features_scaler])
         
     def transform(self,df):
         df = df.copy()
@@ -38,8 +39,9 @@ class PreProcessMIMIC():
         for feature in self.features_divide:
             df.loc[:,feature] = df.loc[:,feature] / self.dividers[feature]
         # remaining variables
-        df.loc[:,self.features_scaler] = self.scaler.transform(df[self.features_scaler])
-        df.loc[:,self.features_scaler] = df.loc[:,self.features_scaler].fillna(value=0.0)
+        if len(self.features_scaler) > 0:
+            df.loc[:,self.features_scaler] = self.scaler.transform(df[self.features_scaler])
+            df.loc[:,self.features_scaler] = df.loc[:,self.features_scaler].fillna(value=0.0)
         
         return df
     

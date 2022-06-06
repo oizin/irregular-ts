@@ -128,60 +128,60 @@ class BinnedOutputNN(nn.Module):
     def __init__(self):
         raise AttributeError('Not implemented')
 
-# class ConditionalExpectNN(nn.Module):
-#     """conditionalExpectNN
-#     E(y|x)
-#     (batch_size,:,features) -> (batch_size,:,2)
-#     (batch_size,features) -> (batch_size,2)
-#     """
-#     def __init__(self,hidden_dim,g=lambda a : a,ginv=lambda a : a):
-#         super().__init__()
-#         self.output_dim = 1
-#         self.ginv=ginv
-#         self.mu_net = nn.Sequential(
-#             nn.Linear(hidden_dim,hidden_dim//2),
-#             nn.Tanh(),
-#             #nn.Dropout(p=0.1),
-#             nn.Linear(hidden_dim//2, 1),
-#         )
-#         self.mse = nn.MSELoss(reduction='sum')
+class ConditionalExpectNN(nn.Module):
+    """conditionalExpectNN
+    E(y|x)
+    (batch_size,:,features) -> (batch_size,:,2)
+    (batch_size,features) -> (batch_size,2)
+    """
+    def __init__(self,hidden_dim,g=lambda a : a,ginv=lambda a : a):
+        super().__init__()
+        self.output_dim = 1
+        self.ginv=ginv
+        self.mu_net = nn.Sequential(
+            nn.Linear(hidden_dim,hidden_dim//2),
+            nn.Tanh(),
+            #nn.Dropout(p=0.1),
+            nn.Linear(hidden_dim//2, 1),
+        )
+        self.mse = nn.MSELoss(reduction='sum')
     
-#     def forward(self,x):
-#         """
-#         x of dimension ()
-#         """
-#         mu_out = self.mu_net(x)
-#         return mu_out
+    def forward(self,x):
+        """
+        x of dimension ()
+        """
+        mu_out = self.mu_net(x)
+        return mu_out
     
-#     def loss_fn(self,pred,y):
-#         """
-#         (batch_size,vals) -> (?)
-#         """
-#         mse = self.mse(pred.squeeze(1),y)
-#         return mse
+    def loss_fn(self,pred,y):
+        """
+        (batch_size,vals) -> (?)
+        """
+        mse = self.mse(pred.squeeze(1),y)
+        return mse
     
-#     def loss_update_fn(self,pred,y,e=0.0):
-#         """
-#         (batch_size,vals) -> (?)
-#         """
-#         mse = self.mse(pred.squeeze(1),y)
-#         return mse
+    def loss_update_fn(self,pred,y,e=0.0):
+        """
+        (batch_size,vals) -> (?)
+        """
+        mse = self.mse(pred.squeeze(1),y)
+        return mse
     
-#     def sse_fn(self,pred,y):
-#         """
-#         Method for calculation of the sum of squared errors
-#         """
-#         #mse = self.mse(pred.squeeze(1),y)
-# #         print(self.ginv(pred[:,0].cpu().numpy()))
-# #         print(self.ginv(y.cpu().numpy()))
-#         mse = torch.tensor(np.sum((self.ginv(pred[:,0].cpu().numpy()) - self.ginv(y.cpu().numpy()))**2))
-#         return mse
+    def sse_fn(self,pred,y):
+        """
+        Method for calculation of the sum of squared errors
+        """
+        #mse = self.mse(pred.squeeze(1),y)
+#         print(self.ginv(pred[:,0].cpu().numpy()))
+#         print(self.ginv(y.cpu().numpy()))
+        mse = torch.tensor(np.sum((self.ginv(pred[:,0].cpu().numpy()) - self.ginv(y.cpu().numpy()))**2))
+        return mse
         
-#     def probabilistic_eval_fn(self,pred,y,alpha=0.05):
-#         return {'crps_mean':np.NaN,
-#                 'ig_mean':np.NaN,
-#                 'int_score_mean':np.NaN,
-#                 'var_pit':np.NaN,
-#                 'int_coverage':np.NaN,
-#                 'int_av_width':np.NaN,
-#                 'int_med_width':np.NaN}
+    def probabilistic_eval_fn(self,pred,y,alpha=0.05):
+        return {'crps_mean':np.NaN,
+                'ig_mean':np.NaN,
+                'int_score_mean':np.NaN,
+                'var_pit':np.NaN,
+                'int_coverage':np.NaN,
+                'int_av_width':np.NaN,
+                'int_med_width':np.NaN}

@@ -78,7 +78,7 @@ class MIMICDataset(Dataset):
                 df_id = df.loc[df[features['id']] == id_,:]
             else:
                 df_id = df.loc[df[features['id']] == id_,:].iloc[0:self.pad]
-            Xt = df_id.loc[:,features['timevarying']]
+            Xt = df_id.loc[:,features['timevarying'] + features['counts']]
             X0 = df_id.loc[:,features['static']]
             Xi = df_id.loc[:,features['intervention']]
             X0 = X0.iloc[0,:]

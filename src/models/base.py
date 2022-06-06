@@ -5,7 +5,6 @@ import torch.optim as optim
 import pytorch_lightning as pl
 import numpy as np
 import matplotlib.pyplot as plt 
-from ..metrics.metrics import probabilistic_eval_fn,sse_fn
 
 class BaseModel(pl.LightningModule):
     """BaseModel
@@ -19,7 +18,7 @@ class BaseModel(pl.LightningModule):
     
     input_dims - a dictionary
     """
-    def __init__(self,RNN,OutputNN,preNN,NN0,dims,ginv,learning_rate=1e-1,update_loss=1e-3,merror=1e-2):
+    def __init__(self,RNN,OutputNN,preNN,NN0,dims,ginv,eval_fn,learning_rate=1e-1,update_mixing=1e-3,merror=1e-2):
         super().__init__()
         #self.save_hyperparameters()
         self.learning_rate = learning_rate
@@ -32,12 +31,13 @@ class BaseModel(pl.LightningModule):
         self.input_dim_t = dims['input_dim_t']
         self.input_dim_i = dims['input_dim_i']
         self.input_dim_0 = dims['input_dim_0']
-        self.update_loss = update_loss
+        self.update_mixing = update_mixing
         self.preNN = preNN
         self.NN0 = NN0
         self.merror=merror
         self.ginv=ginv
         self.loss_update_fn = OutputNN.loss_update_fn
+        self.eval_fn = eval_fn
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -52,7 +52,7 @@ class BaseModel(pl.LightningModule):
         optim_setting = {
         "optimizer": optimizer,
         "lr_scheduler": {
-            "scheduler": optim.lr_scheduler.ReduceLROnPlateau(optimizer,'min',patience=1,threshold=1e-2),
+            "scheduler": optim.lr_scheduler.ReduceLROnPlateau(optimizer,'min',patience=5,threshold=1e-2),
             "monitor": "val_loss"}}
         return optim_setting
 
@@ -63,7 +63,7 @@ class BaseModel(pl.LightningModule):
         pred_step,pred_update_step = self.forward(dt,(xt,x0,xi),training = True, p = 0.2,include_update=True)
         loss_pred = self.loss_fn(pred_step[~msk],y[~msk])
         loss_update = self.loss_update_fn(pred_update_step[~msk_update],xt[:,:,0][~msk_update],e=self.merror)
-        loss_step = loss_pred + self.update_loss*loss_update
+        loss_step = loss_pred + self.update_mixing*loss_update
         self.log("training_loss", loss_step)
         self.log("pred_loss", loss_pred)
         self.log("update_loss", loss_update)
@@ -76,72 +76,48 @@ class BaseModel(pl.LightningModule):
         pred_step,pred_update_step = self.forward(dt,(xt,x0,xi),include_update=True)
         loss_pred = self.loss_fn(pred_step[~msk],y[~msk])
         loss_update = self.loss_update_fn(pred_update_step[~msk_update],xt[:,:,0][~msk_update],e=self.merror)
-        loss_step = loss_pred + self.update_loss*loss_update
-        sse_step = sse_fn(pred_step[~msk],y[~msk],ginv=self.ginv)
+        loss_step = loss_pred + self.update_mixing*loss_update
         n_step = torch.sum(~msk.bool())
-        return {'loss':loss_step,'loss_update':loss_update,'loss_pred':loss_pred,'sse':sse_step,'n':n_step}
+        return {'loss':loss_step,'loss_update':loss_update,'loss_pred':loss_pred,'n':n_step}
     
     def validation_epoch_end(self, outputs):
         loss_epoch = torch.tensor([o['loss'] for o in outputs])
         loss_pred_epoch = torch.tensor([o['loss_pred'] for o in outputs])
         loss_update_epoch = torch.tensor([o['loss_update'] for o in outputs])
-        sse_epoch = torch.tensor([o['sse'] for o in outputs])
         n_epoch = torch.tensor([o['n'] for o in outputs])
-        rmse = torch.sqrt(torch.sum(sse_epoch)/torch.sum(n_epoch))
         loss = torch.sum(loss_epoch)#/torch.sum(n_epoch)
         loss_pred = torch.sum(loss_pred_epoch)#/torch.sum(n_epoch)
         loss_update = torch.sum(loss_update_epoch)#/torch.sum(n_epoch)
         self.log("val_loss", loss)
         self.log("val_loss_pred", loss_pred)
         self.log("val_loss_update", loss_update)
-        self.log("val_rmse", rmse)
 
     def test_step(self, batch, batch_idx):
         xt,x0,xi, y, msk, dt,_,_ = batch
         msk = msk.bool()
         pred_step = self.forward(dt,(xt,x0,xi))
         loss_step = self.loss_fn(pred_step[~msk],y[~msk])
-        sse_step = sse_fn(pred_step[~msk],y[~msk],ginv=self.ginv)
         n_step = torch.sum(~msk.bool())
-        return {'loss':loss_step,'sse':sse_step,'n':n_step,'y':y[~msk].cpu(),'pred':pred_step[~msk].cpu()}
+        return {'loss':loss_step,'n':n_step,'y':y[~msk].cpu(),'pred':pred_step[~msk].cpu()}
 
     def test_epoch_end(self, outputs):
         # extract data
         # loss_update_epoch = torch.tensor([o['loss_update'] for o in outputs])
         # loss_pred_epoch = torch.tensor([o['loss_pred'] for o in outputs])
         loss_epoch = torch.tensor([o['loss'] for o in outputs])
-        sse_epoch = torch.tensor([o['sse'] for o in outputs])
         n_epoch = torch.tensor([o['n'] for o in outputs])
         y_epoch = np.concatenate([o['y'] for o in outputs])
+        y_epoch = np.expand_dims(y_epoch,1)
         pred_epoch = np.concatenate([o['pred'] for o in outputs])
         # pred_update = np.concatenate([o['pred_update'] for o in outputs])
         # metrics
-        rmse = torch.sqrt(torch.sum(sse_epoch)/torch.sum(n_epoch))
         loss = torch.sum(loss_epoch)/torch.sum(n_epoch)
-        # loss_update = torch.sum(loss_update_epoch)/torch.sum(n_epoch)
-        # loss = torch.sum(loss_epoch)/torch.sum(n_epoch)
         # log
         self.log("test_loss", loss)
-        # self.log("test_loss_pred", loss_pred)
-        # self.log("test_loss_update", loss_update)
-        self.log("test_rmse", rmse)
-        if pred_epoch.shape[1] > 1:
-            prob_eval = probabilistic_eval_fn(pred_epoch,y_epoch,ginv=self.ginv)
-            crps = prob_eval['crps_mean']
-            ig =  prob_eval['ig_mean']
-            int_score = prob_eval['int_score_mean']
-            var_pit = prob_eval['var_pit']
-            int_coverage = prob_eval['int_coverage']
-            int_av_width = prob_eval['int_av_width']
-            int_med_width = prob_eval['int_med_width']
-            # log
-            self.log("test_var_pit", var_pit)
-            self.log("test_crps", crps)
-            self.log("test_ignorance", ig)
-            self.log("test_int_score", int_score)
-            self.log("int_coverage", int_coverage)
-            self.log("int_med_width", int_med_width)
-            self.log("int_av_width", int_av_width)
+        eval = self.eval_fn(pred_epoch,y_epoch,ginv=self.ginv)
+        print(eval)
+        for key in eval.keys():
+            self.log(key,eval[key])
 
     def forward(self, dt, x, training = False, p = 0.2, include_update=False):
         """
@@ -210,10 +186,10 @@ class BaseModel(pl.LightningModule):
 class BaseModelAblate(BaseModel):
     """BaseModelAblate
     
-    discrete time
+    no time
     """
-    def __init__(self,RNN,OutputNN,preNN,NN0,dims,ginv,**kwargs):
-        super().__init__(RNN,OutputNN,preNN,NN0,dims,ginv,**kwargs)
+    def __init__(self,RNN,OutputNN,preNN,NN0,dims,ginv,eval_fn,**kwargs):
+        super().__init__(RNN,OutputNN,preNN,NN0,dims,ginv,eval_fn,**kwargs)
 
     def training_step(self, batch, batch_idx):
         xt,x0,xi,y, msk, dt, _,_ = batch
@@ -228,20 +204,16 @@ class BaseModelAblate(BaseModel):
         msk = msk.bool()
         pred_step = self.forward(dt,(xt,x0,xi))
         loss_step = self.loss_fn(pred_step[~msk],y[~msk])
-        sse_step = sse_fn(pred_step[~msk],y[~msk])
         n_step = torch.sum(~msk.bool())
-        return {'loss':loss_step,'sse':sse_step,'n':n_step}
+        return {'loss':loss_step,'n':n_step}
     
     def validation_epoch_end(self, outputs):
         loss_epoch = torch.tensor([o['loss'] for o in outputs])
-        sse_epoch = torch.tensor([o['sse'] for o in outputs])
         n_epoch = torch.tensor([o['n'] for o in outputs])
-        rmse = torch.sqrt(torch.sum(sse_epoch)/torch.sum(n_epoch))
         loss = torch.sum(loss_epoch)/torch.sum(n_epoch)
         self.log("val_loss", loss)
-        self.log("val_rmse", rmse)
 
-    def forward(self, dt, x, training = False, p = 0.0):
+    def forward(self, dt, x, training = False, p = 0.2):
         
         xt,x0,xi = x
         T = xt.size(1)
@@ -264,6 +236,13 @@ class BaseModelAblate(BaseModel):
         return output    
 
 
+class BaseModelForward(BaseModel):
+    """BaseModelForward
+    
+    no recurrence
+    """
+    def __init__(self,OutputNN,preNN,NN0,dims,ginv,eval_fn,**kwargs):
+        super().__init__(None,OutputNN,preNN,NN0,dims,ginv,eval_fn,**kwargs)
 
 
 

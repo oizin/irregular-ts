@@ -14,16 +14,16 @@ class GaussianOutputNNBase(nn.Module):
         # self.ginv=ginv
         # self.g=g
         self.mu_net = nn.Sequential(
-            nn.Linear(hidden_dim,hidden_dim//2),
+            nn.Linear(hidden_dim,hidden_dim),
             nn.Dropout(0.2),
-            nn.Tanh(),
-            nn.Linear(hidden_dim//2, 1),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
         )
         self.sigma_net = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim//2),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(hidden_dim//2, 1),
+            nn.Linear(hidden_dim, 1),
         )
     
     def forward(self,x):

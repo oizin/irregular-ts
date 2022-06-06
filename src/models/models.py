@@ -113,6 +113,7 @@ class ODEGRUModel(BaseModel):
         odernn = ct.ODEGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        self.save_hyperparameters({'model':'ODEGRUModel'})
 
 class FlowGRUModel(BaseModel):
     def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
@@ -122,6 +123,7 @@ class FlowGRUModel(BaseModel):
         odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        self.save_hyperparameters({'model':'FlowGRUModel'})
 
 class GRUModel(BaseModelAblate):
     def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
@@ -129,7 +131,7 @@ class GRUModel(BaseModelAblate):
         rnn = nn.GRUCell(dims['hidden_dim_t'],dims['hidden_dim_t'])
         gaussianNN = outputNN(dims['hidden_dim_t'])
         super().__init__(rnn,gaussianNN,encoder,NN0,dims,ginv,**kwargs)
-        #self.save_hyperparameters({'net':'dtGRUModel'})
+        self.save_hyperparameters({'model':'GRUModel'})
 
 class DecayGRUModel(BaseModel):
     def __init__(self,dims,outputNN,ginv,NN0=nn.Identity(),**kwargs):
@@ -139,6 +141,7 @@ class DecayGRUModel(BaseModel):
         odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
+        self.save_hyperparameters({'model':'DecayGRUModel'})
 
 # LSTM flavours -------------------------------------------------------------------------------
 
@@ -210,7 +213,7 @@ class ODELSTMModel(BaseModelLSTM):
         odernn = ct.ODELSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
-        #self.save_hyperparameters({'net':'ctLSTMModel'})
+        self.save_hyperparameters({'model':'ODELSTMModel'})
                 
 class FlowLSTMModel(BaseModelLSTM):
 
@@ -221,7 +224,7 @@ class FlowLSTMModel(BaseModelLSTM):
         odernn = ct.FlowLSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,**kwargs)
-        #self.save_hyperparameters({'net':'ctLSTMModel'})
+        self.save_hyperparameters({'model':'FlowLSTMModel'})
         
 # IMODE model -----------------------------------------------------------------------------------------
 
@@ -321,7 +324,7 @@ class IMODE(BaseModel):
         odernn = ct.neuralJumpODECell(jumpnn,odenet)
         gaussianNN = outputNN(self.hidden_dim_t)
         super().__init__(odernn,gaussianNN,nn.Identity(),NN0,dims,ginv,**kwargs)
-        #self.save_hyperparameters({'net':'IMODE'})
+        self.save_hyperparameters({'model':'IMODE'})
         
     def forward(self, dt, x, training = False, p = 0.0, include_update=False):
         """

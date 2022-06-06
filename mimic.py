@@ -50,7 +50,7 @@ parser.add_argument('--lr', dest='lr',default=0.01,type=float)
 parser.add_argument('--test', dest='test',default=False,type=bool)
 parser.add_argument('--logfolder', dest='logfolder',default='default',type=str)
 parser.add_argument('--update_loss', dest='update_loss',default=0.001,type=float)
-parser.add_argument('--loss', dest='loss',default="LL",type=str)
+#parser.add_argument('--loss', dest='loss',default="LL",type=str)
 parser.add_argument('--merror', dest='merror',default=0.01,type=float)
 parser.add_argument('--nfolds', dest='nfolds',default=1,type=int)
 parser.add_argument('--plot', dest='plot',default=True,type=bool)
@@ -89,10 +89,7 @@ def train_test_deeplearner():
     #mimic.setup()
     
     # model
-    if dict_args['loss'] == "KL":
-        outputNN = GaussianOutputNNKL
-    else:
-        outputNN = GaussianOutputNNLL
+    outputNN = GaussianOutputNNKL
     model = models[dict_args['model']]
     model = model(dims,
                 outputNN,
@@ -124,6 +121,7 @@ def train_test_deeplearner():
         predictions = torch.cat(predictions,dim=0).numpy()
         df_predictions = pd.DataFrame(predictions,columns=['rn','mu','sigma'])
         df_predictions['rn'] = df_predictions.rn.astype(int)
+        df_predictions['model'] = dict_args['model']
         df_predictions.to_csv(os.path.join(trainer.logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
 def train_test_catboost(df_train,df_test):
@@ -159,6 +157,7 @@ def train_test_catboost(df_train,df_test):
     df_predictions = df_test.loc[df_test.msk == 0,['rn']]
     df_predictions.loc[:,'mu'] = preds[:,0]
     df_predictions.loc[:,'sigma'] = preds[:,1]
+    df_predictions['model'] = 'Catboost'
     df_predictions.to_csv(os.path.join(logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
 def import_feature_sets():

@@ -42,7 +42,10 @@ pip install https://github.com/oizin/torchctrnn/tarball/main
 NOTE: add an irregular-ts branch to torchctrnn!
     
 ### Using the code
-    
+
+conda create --clone base --name irregular
+conda activate irregular
+
 The files mimic.py and simulation.py
     
 python train.py --hidden_dim_t=12 --net=ctRNNModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1

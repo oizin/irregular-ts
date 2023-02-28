@@ -1,4 +1,5 @@
 ## libraries ##
+import time
 # use lightning framework
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
@@ -16,6 +17,7 @@ from sklearn.model_selection import train_test_split
 from src.models.models import *
 from src.models.output import *
 from src.models.catboost import CatboostModel,catboost_feature_engineer
+from src.models.linearmodel import LinearModel
 import torch
 from catboost import Pool
 # evaluation
@@ -23,24 +25,20 @@ import src.metrics.metrics as metrics
 # other
 import os
 # plotting
-#import matplotlib.pyplot as plt
-#from src.plotting.trajectories import *
+import matplotlib.pyplot as plt
+from src.plotting.trajectories import *
 
 ## possible models ##
-models = {#'ctRNNModel': ctRNNModel, 
-        'CatboostModel': CatboostModel
+models = {'LinearModel': LinearModel
+        ,'CatboostModel': CatboostModel
         ,'ODEGRUModel': ODEGRUModel
         ,'FlowGRUModel': FlowGRUModel
         ,'DecayGRUModel':DecayGRUModel
         ,'ODELSTMModel':ODELSTMModel
         ,'FlowLSTMModel':FlowLSTMModel
-        #'ODEGRUBayes':ODEGRUBayes, 
-        #'neuralJumpModel':neuralJumpModel, 
-        #'resNeuralJumpModel':resNeuralJumpModel, 
         ,'IMODE':IMODE
-        #'dtRNNModel':RNNModel, 
         ,'GRUModel':GRUModel
-        #,'LSTMModel':LSTMModel
+        ,'LSTMModel':LSTMModel
         }
 
 ## cmd args ##
@@ -68,21 +66,21 @@ parser.add_argument('--task',dest='task',
 parser.add_argument('--model', dest='model',choices=list(models.keys()),type=str)
 parser.add_argument('--lr', dest='lr',default=0.01,type=float)
 parser.add_argument('--update_mixing', dest='update_mixing',default=0.001,type=float)
-parser.add_argument('--merror', dest='merror',default=0.01,type=float)
+parser.add_argument('--merror', dest='merror',default=1e-3,type=float)
 parser.add_argument('--niter', dest='niter',default=10000,type=int)
 
 #parser.add_argument('--loss', dest='loss',default="LL",type=str)
-#parser.add_argument('--plot', dest='plot',default=True,type=bool)
+parser.add_argument('--plot', dest='plot',default=False,type=bool)
 parser = BaseModel.add_model_specific_args(parser)
 parser = pl.Trainer.add_argparse_args(parser)
 args = parser.parse_args()
 
-# def predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,y_full,t_full,nsteps=10,ginv=lambda x: x,xlabel="Time (hours in ICU)",ylabel="Blood glucose (mg/dL)",title=""):
-#     preds = model.forward_trajectory(dt_j,(xt_j,x0_j,xi_j),nsteps=nsteps)
-#     ts_j = time_trajectories(dt_j.squeeze(0),nsteps+1)
-#     mu_tj,sigma_tj = join_trajectories_gaussian(preds)
-#     ys_j,t_j = obs_data(xt_j.squeeze(0),y_j,dt_j.squeeze(0))
-#     plot_trajectory_dist(t_j,ys_j,ts_j,mu_tj,sigma_tj,y_full,t_full,ginv=ginv,xlabel=xlabel,ylabel=ylabel,sim=False,maxtime=12)
+def predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,y_full,t_full,nsteps=10,ginv=lambda x: x,xlabel="Time (hours in ICU)",ylabel="Blood glucose (mg/dL)",title=""):
+    preds = model.forward_trajectory(dt_j,(xt_j,x0_j,xi_j),nsteps=nsteps)
+    ts_j = time_trajectories(dt_j.squeeze(0),nsteps+1)
+    mu_tj,sigma_tj = join_trajectories_gaussian(preds)
+    ys_j,t_j = obs_data(xt_j.squeeze(0),y_j,dt_j.squeeze(0))
+    plot_trajectory_dist(t_j,ys_j,ts_j,mu_tj,sigma_tj,y_full,t_full,ginv=ginv,xlabel=xlabel,ylabel=ylabel,sim=False,maxtime=12)
 
 def ginv(x):
     x = x.copy()
@@ -162,6 +160,32 @@ def train_test_deeplearner(df_train,df_test,features,task='gaussian',test=True):
         df_predictions['model'] = args.model
         df_predictions.to_csv(os.path.join(trainer.logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
+    # plot some examples
+    # if args.plot == True:
+    #     if args.model in ['ODEGRUModel']:
+    #             model.RNN.NeuralODE.backend = 'torchdiffeq'
+    #             dl_test = mimic.val_dataloader()
+    #             xt, x0, xi, y, msk, dt, _, id = next(iter(dl_test))
+    #             #ids = [id_.item() for id_ in id]
+
+    #             n_examples = 40
+    #             for j in range(n_examples):
+    #                 with torch.no_grad():
+    #                     model.eval()
+    #                     msk_j = ~msk[j].bool()
+    #                     if sum(msk_j) > 1:
+    #                         dt_j = dt[j][msk_j].unsqueeze(0)
+    #                         xt_j = xt[j][msk_j].unsqueeze(0)
+    #                         x0_j = x0[j].unsqueeze(0)
+    #                         xi_j = xi[j][msk_j].unsqueeze(0)
+    #                         y_j = y[j][msk_j]
+    #                         df_j = df.loc[df.stay_id == id[j].item(),:]
+    #                         predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,df_j.glc_dt,df_j.timer_dt,nsteps=30,ginv=ginv)
+    #                         plt.savefig(os.path.join(trainer.logger.log_dir,'example_'+str(j)+'.png'),bbox_inches='tight', dpi=150)
+    #                         plt.close()
+    #                     else:
+    #                         next
+
 ## catboost trainer ##
 def train_test_catboost(df_train,df_test,features,task='gaussian',test=True,niter=10000):
     ## setup data ##
@@ -213,6 +237,46 @@ def train_test_catboost(df_train,df_test,features,task='gaussian',test=True,nite
         df_predictions['model'] = 'Catboost'
         df_predictions.to_csv(os.path.join(logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
 
+## linear trainer ##
+def train_test_linear_model(df_train,df_test,features,task='gaussian',test=True):
+    ## setup data ##
+    # train data
+    input_features = features['timevarying'] + features['static'] + features['counts'] + features['time_vars']
+    print(input_features)
+    # train-validation split
+    X_train = df_train.loc[df_train.msk == 0,input_features].to_numpy()
+    y_train = g(df_train.loc[df_train.msk == 0,features['target']].to_numpy())
+    # test data
+    X_test = df_test.loc[df_test.msk == 0,input_features].to_numpy()
+    y_test = g(df_test.loc[df_test.msk == 0,features['target']].to_numpy())
+    ## setup model ##
+    if task == 'gaussian':
+        eval_fn = metrics.gaussian_eval_fn
+    elif task == 'conditional_expectation':
+        eval_fn = metrics.conditional_eval_fn
+    elif task == 'categorical':
+        eval_fn = metrics.categorical_eval_fn
+    model = LinearModel(task,eval_fn)
+    ## train model ##
+    model.fit(X_train,y_train)
+    ## test model ##
+    if test:
+        preds = model.predict(X_test)
+        print(preds)
+        eval_linear = model.eval_fn(preds,y_test,ginv)
+        print(eval_linear)
+        logger.log_metrics(eval_linear)
+        logger.save()
+        # save predictions
+        df_predictions = df_test.loc[df_test.msk == 0,['rn']]
+        if task == "gaussian": 
+            df_predictions.loc[:,'mu'] = preds[:,0]
+            df_predictions.loc[:,'sigma'] = preds[:,1]
+        elif task == "conditional_expectation":
+            df_predictions.loc[:,'mu'] = preds
+        df_predictions['model'] = 'LinearModel'
+        df_predictions.to_csv(os.path.join(logger.log_dir,'predictions_' + str(i) + '.csv'),index=False)
+
 def import_feature_sets():
     pass
 
@@ -231,9 +295,7 @@ if __name__ == '__main__':
     with open('data/feature_sets.json', 'r') as f:
         feature_sets = json.load(f)
     features = feature_sets[args.data.split('_')[0]][args.features]
-    if args.model in ['neuralJumpModel','resNeuralJumpModel']:
-        features['intervention'] = features['intervention'] + features['timevarying'] 
-    elif args.model in ['IMODE']:
+    if args.model in ['IMODE']:
         features['timevarying'] = [t for t in features['timevarying'] if t in features['timevarying'] and t not in features['intervention']]
     
     ## dimensions - for NNs ##
@@ -250,7 +312,7 @@ if __name__ == '__main__':
     df = pd.read_csv('data/'+ args.data +'.csv')
     df.sort_values(by=[features['id'],features['time_vars'][0]],inplace=True)
     if args.data.split('_')[0] == 'simulation':
-        # only use "oberved data" in the simulation
+        # only use "observed data" in the simulation
         df = df.loc[(df.obs == True) & ~(df.glucose_t_obs_next.isnull()),:] 
         print(df)
     df.reset_index(drop=True,inplace=True)
@@ -277,32 +339,15 @@ if __name__ == '__main__':
         print('Data size: train {}; test {}'.format(df_train.shape[0],df_test.shape[0]))
 
         ## run model train/test ##
+        start_time = time.time()
         if args.model in ['CatboostModel']:
             train_test_catboost(df_train,df_test,features,args.task,args.test,args.niter)
+        elif args.model in ['LinearModel']:
+            train_test_linear_model(df_train,df_test,features,args.task,args.test)
         else:
             train_test_deeplearner(df_train,df_test,features,args.task,args.test)
-            
-        # # plot some examples
-        # if args.plot == True:
-        #     if not args.model in ['dtRNNModel','dtGRUModel','dtLSTMModel']:
-        #             dl_test = mimic.val_dataloader()
-        #             xt, x0, xi, y, msk, dt, _, id = next(iter(dl_test))
-        #             ids = [id_.item() for id_ in id]
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print('Execution time:', elapsed_time, 'seconds')
 
-        #             n_examples = 40
-        #             for i in range(n_examples):
-        #                 with torch.no_grad():
-        #                     model.eval()
-        #                     msk_j = ~msk[i].bool()
-        #                     if sum(msk_j) > 1:
-        #                         dt_j = dt[i][msk_j].unsqueeze(0)
-        #                         xt_j = xt[i][msk_j].unsqueeze(0)
-        #                         x0_j = x0[i].unsqueeze(0)
-        #                         xi_j = xi[i][msk_j].unsqueeze(0)
-        #                         y_j = y[i][msk_j]
-        #                         df_j = df.loc[df.stay_id == id[i].item(),:]
-        #                         predict_and_plot_trajectory(model,dt_j,xt_j,x0_j,xi_j,y_j,df_j.glc_dt,df_j.timer_dt,nsteps=30,ginv=ginv)
-        #                         plt.savefig(os.path.join(trainer.logger.log_dir,'example_'+str(ids[i])+'.png'),bbox_inches='tight', dpi=150)
-        #                         plt.close()
-        #                     else:
-        #                         next
+            

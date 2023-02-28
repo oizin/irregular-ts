@@ -34,7 +34,6 @@ class GaussianOutputNNBase(nn.Module):
         sigma_out = torch.exp(self.sigma_net(x))
         return torch.cat((mu_out,sigma_out),1)
     
-
     # def probabilistic_eval_fn(self,pred,y,alpha=0.05):
     #     m,s = pred[:,0],pred[:,1]
     #     alpha_q = scipy.stats.norm.ppf(1-alpha/2)

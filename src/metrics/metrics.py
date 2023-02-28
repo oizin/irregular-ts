@@ -28,7 +28,8 @@ def gaussian_eval_fn(pred,y,ginv = lambda x: x,alpha=0.05):
     yinv = ginv(y)
     int_score = (upper - lower) + 2/alpha*(lower - yinv)*(yinv < lower) + 2/alpha*(yinv - upper)*(yinv > upper)
     int_score_mean = np.mean(int_score)
-    int_coverage = sum((lower < yinv) & (upper > yinv))/yinv.shape[0]
+    vals = (lower < yinv) & (upper > yinv)
+    int_coverage = sum(vals)/yinv.shape[0]
     int_av_width = np.mean(upper - lower)
     int_med_width = np.median(upper - lower)
     rmse = np.sqrt(np.mean((ginv(m) - ginv(y))**2))

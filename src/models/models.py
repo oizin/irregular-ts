@@ -1,4 +1,4 @@
-from .base import BaseModel,BaseModelAblate
+from .base import BaseModel,BaseModelTimeGap
 from .output import *
 #from .odenet import *
 #from .jumpnn import *
@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchctrnn as ct
-#from torch.nn.utils.parametrizations import spectral_norm
+from torch.nn.utils.parametrizations import spectral_norm
 
 #ode_tol = {'atol':1e-2,'rtol':1e-2}
 
@@ -37,6 +37,7 @@ import torchctrnn as ct
 #             nn.Linear(dims['input_dim_0'] // 2,dict_args['hidden_dim_0']),
 #             nn.Dropout(0.2),
 #             nn.Tanh())
+
 # preNN = nn.Sequential(
 #             nn.Linear(dims['input_dim_t']+dict_args['hidden_dim_0'],(dims['input_dim_t']+dict_args['hidden_dim_0']) // 2),
 #             nn.Dropout(0.2),
@@ -56,6 +57,7 @@ class ODEFunc(nn.Module):
             nn.Linear(input_dim, hidden_dim),
             nn.Tanh(),
             nn.Linear(hidden_dim, output_dim),
+            nn.Tanh()
         )
 
         for m in self.layers.modules():
@@ -74,16 +76,16 @@ class DecayFlow(nn.Module):
         self.input_dim = input_dim
         while True:
             A = torch.randn((input_dim,input_dim))
-            if torch.matrix_rank(A) == input_dim:
+            if torch.linalg.matrix_rank(A) == input_dim:
                 break
         B = torch.matmul(A.t(), A)
         self.A = nn.Parameter(B)
 
-    def forward(self,hidden,dt):
-        At = self.A.unsqueeze(0).repeat_interleave(dt.shape[0],0) * dt.view((-1,1,1))
+    def forward(self,hidden,delta_t):
+        At = self.A.unsqueeze(0).repeat_interleave(delta_t.shape[0],0) * delta_t.view((-1,1,1))
         e_At = torch.matrix_exp(-At)
         output = torch.matmul(e_At,hidden.unsqueeze(2)).squeeze(2)
-        return hidden
+        return output
 
 class Encoder(nn.Module):
     def __init__(self,input_dim,hidden_dim,output_dim):
@@ -102,14 +104,30 @@ class Encoder(nn.Module):
         output = self.layers(input)
         return output
 
+class ResNetFlow(nn.Module):
+    def __init__(self,input_size,hidden_size,n_power_iterations=1):
+        super(ResNetFlow,self).__init__()
+        self.n_power_iterations = n_power_iterations
+        self.net = nn.Sequential(
+                        spectral_norm(nn.Linear(input_size+1,hidden_size),n_power_iterations=self.n_power_iterations),
+                        nn.Tanh(),
+                        spectral_norm(nn.Linear(hidden_size,input_size),n_power_iterations=self.n_power_iterations),
+                        nn.Tanh()
+        )
+        self.time_func = nn.Tanh()
+
+    def forward(self,hidden,delta_t):
+        return hidden + self.time_func(delta_t)*self.net(torch.cat((hidden,delta_t),1))
+
+
 # GRU flavours -------------------------------------------------------------------------------
 
 class ODEGRUModel(BaseModel):
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
-        odenet = ct.NeuralODE(func,time_func='tanh',time_dependent=False,data_dependent=False,
-                            solver='euler',solver_options={'step_size':1e-1})
+        odenet = ct.NeuralODE(func,time_func=lambda x : x / 24.0,time_dependent=False,data_dependent=False,
+                  backend='torchctrnn',solver='euler',solver_options={'step_size':0.01})
         odernn = ct.ODEGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
@@ -118,17 +136,17 @@ class ODEGRUModel(BaseModel):
 class FlowGRUModel(BaseModel):
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],12,dims['hidden_dim_t'])
-        func = ct.ResNetFlow(dims['hidden_dim_t'],12)
+        func = ResNetFlow(dims['hidden_dim_t'],12)
         odenet = ct.NeuralFlow(func)
         odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'FlowGRUModel'})
 
-class GRUModel(BaseModelAblate):
+class GRUModel(BaseModelTimeGap):
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
-        encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
-        rnn = nn.RNNCell(dims['hidden_dim_t'],dims['hidden_dim_t'])
+        encoder = None
+        rnn = nn.GRUCell(dims['input_size_update']+dims['input_dim_0']+dims['input_dim_i']+2,dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(rnn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'GRUModel'})
@@ -146,8 +164,8 @@ class DecayGRUModel(BaseModel):
 # LSTM flavours -------------------------------------------------------------------------------
 
 class BaseModelLSTM(BaseModel):
-    # def __init__(self,RNN,OutputNN,preNN,NN0,dims,ginv,**kwargs):
-    #     super().__init__(RNN,OutputNN,preNN,NN0,dims,ginv,**kwargs)
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
     
     def forward(self, dt, x, training = False, p = 0.0, include_update=False):
         xt,x0,xi = x
@@ -208,8 +226,8 @@ class ODELSTMModel(BaseModelLSTM):
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
         func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
-        odenet = ct.NeuralODE(func,time_func='tanh',time_dependent=False,data_dependent=False,
-                            solver='euler',solver_options={'step_size':1e-1})
+        odenet = ct.NeuralODE(func,time_func=lambda x : x / 24.0,time_dependent=False,data_dependent=False,
+                  backend='torchctrnn',solver='euler',solver_options={'step_size':0.01})
         odernn = ct.ODELSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
@@ -219,12 +237,39 @@ class FlowLSTMModel(BaseModelLSTM):
 
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
-        func = ct.ResNetFlow(dims['hidden_dim_t'],50)
+        func = ResNetFlow(dims['hidden_dim_t'],50)
         odenet = ct.NeuralFlow(func)
         odernn = ct.FlowLSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'FlowLSTMModel'})
+
+class LSTMModel(BaseModelTimeGap):
+
+    def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
+        preNN=nn.Identity()
+        rnn = nn.LSTMCell(dims['input_size_update']+dims['input_dim_0']+dims['input_dim_i']+2,dims['hidden_dim_t'])
+        outNN = outputNN(dims['hidden_dim_t'])
+        super().__init__(rnn,outNN,preNN,NN0,dims,ginv,eval_fn,**kwargs)
+
+    def forward(self, dt, x, training = False, p = 0.0):
+        xt,x0,xi = x
+        T = xt.size(1)
+        batch_size = xt.size(0)
+        output = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
+        h_t = (torch.zeros(batch_size, self.hidden_dim_t,device=self.device),
+                torch.zeros(batch_size, self.hidden_dim_t,device=self.device))
+        for i in range(0,T):
+            xt_i = xt[:,i,:]
+            xi_i = xi[:,i,:]
+            dt_i = dt[:,i,:]
+            xt_i = torch.cat((xt_i,xi_i,x0,dt_i),1)
+            h_t = self.RNN(xt_i,h_t)
+            o_t,c_t = h_t[0].squeeze(0),h_t[1]
+            o_t = F.dropout(o_t,training=training,p=p)
+            output[:,i,:] = self.OutputNN(o_t)
+            h_t = (o_t,c_t)
+        return output    
         
 # IMODE model -----------------------------------------------------------------------------------------
 

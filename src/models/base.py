@@ -114,7 +114,9 @@ class BaseModel(pl.LightningModule):
         loss = torch.sum(loss_epoch)/torch.sum(n_epoch)
         # log
         self.log("test_loss", loss)
-        eval = self.eval_fn(pred_epoch,y_epoch,ginv=self.ginv)
+        print(y_epoch.shape)
+        print(pred_epoch.shape)
+        eval = self.eval_fn(pred_epoch,y_epoch[:,0],ginv=self.ginv)
         print(eval)
         for key in eval.keys():
             self.log(key,eval[key])
@@ -150,28 +152,27 @@ class BaseModel(pl.LightningModule):
         else:
             return output
     
-    # broken!
-    # def forward_trajectory(self, dt, x, nsteps=10):
-    #     xt, x0,xi = x
-    #     T = xt.size(1)
-    #     batch_size = xt.size(0)
-    #     outputs = []
-    #     h_t = torch.zeros(batch_size, self.hidden_dim_t,device=self.device)
-    #     if (self.NN0 != None):
-    #         z0 = self.NN0(x0)
-    #     for i in range(0,T):
-    #         xt_i = xt[:,i,:]
-    #         xi_i = xi[:,i,:]
-    #         if (self.NN0 != None) & (self.preNN != None):
-    #             xt_i = self.preNN(torch.cat((xt_i,z0),1))
-    #         elif (self.preNN != None):
-    #             xt_i = self.preNN(xt_i)
-    #         dt_i = dt[:,i,:]
-    #         h_t = self.RNN(xt_i,h_t,dt_i,xi_i,n_intermediate=nsteps).squeeze(0)
-    #         outputs_i = self.OutputNN(h_t)
-    #         outputs.append(outputs_i)
-    #         h_t = h_t[-1]
-    #     return outputs
+    def forward_trajectory(self, dt, x, nsteps=10):
+        xt, x0,xi = x
+        T = xt.size(1)
+        batch_size = xt.size(0)
+        outputs = []
+        h_t = torch.zeros(batch_size, self.hidden_dim_t,device=self.device)
+        if (self.NN0 != None):
+            z0 = self.NN0(x0)
+        for i in range(0,T):
+            xt_i = xt[:,i,:]
+            xi_i = xi[:,i,:]
+            if (self.NN0 != None) & (self.preNN != None):
+                xt_i = self.preNN(torch.cat((xt_i,z0),1))
+            elif (self.preNN != None):
+                xt_i = self.preNN(xt_i)
+            dt_i = dt[:,i,:]
+            h_t = self.RNN(xt_i,h_t,dt_i,xi_i,n_intermediate=nsteps).squeeze(0)
+            outputs_i = self.OutputNN(h_t)
+            outputs.append(outputs_i)
+            h_t = h_t[-1]
+        return outputs
 
     def predict_step(self,batch, batch_idx, dataloader_idx=0):
         xt,x0,xi,_,msk,dt,_,key = batch
@@ -183,7 +184,7 @@ class BaseModel(pl.LightningModule):
         return torch.cat((key.unsqueeze(1),output),1)
 
 
-class BaseModelAblate(BaseModel):
+class BaseModelTimeGap(BaseModel):
     """BaseModelAblate
     
     no time
@@ -210,7 +211,7 @@ class BaseModelAblate(BaseModel):
     def validation_epoch_end(self, outputs):
         loss_epoch = torch.tensor([o['loss'] for o in outputs])
         n_epoch = torch.tensor([o['n'] for o in outputs])
-        loss = torch.sum(loss_epoch)/torch.sum(n_epoch)
+        loss = torch.sum(loss_epoch)#/torch.sum(n_epoch)
         self.log("val_loss", loss)
 
     def forward(self, dt, x, training = False, p = 0.2):
@@ -220,21 +221,22 @@ class BaseModelAblate(BaseModel):
         batch_size = xt.size(0)
         output = torch.zeros(batch_size,T,self.OutputNN.output_dim,device = self.device)
         h_t = torch.zeros(batch_size, self.hidden_dim_t,device=self.device)
-        if (self.NN0 != None):
-            z0 = self.NN0(x0)
+        # if (self.NN0 != None):
+        #     z0 = self.NN0(x0)
         for i in range(0,T):
             xt_i = xt[:,i,:]
             xi_i = xi[:,i,:]
-            if (self.NN0 != None) & (self.preNN != None):
-                xt_i = self.preNN(torch.cat((xt_i,z0),1))
-            elif (self.preNN != None):
-                xt_i = self.preNN(xt_i)
             dt_i = dt[:,i,:]
+            xt_i = torch.cat((xt_i,xi_i,x0,dt_i),1)
+            # if (self.NN0 != None) & (self.preNN != None):
+            #     xt_i = self.preNN(torch.cat((xt_i,z0),1))
+            # elif (self.preNN != None):
+            #     xt_i = self.preNN(xt_i)
+            # 
             h_t = self.RNN(xt_i,h_t).squeeze(0)
             h_t = F.dropout(h_t,training=training,p=p)
             output[:,i,:] = self.OutputNN(h_t)
         return output    
-
 
 class BaseModelForward(BaseModel):
     """BaseModelForward
@@ -409,13 +411,3 @@ class BaseModelForward(BaseModel):
     #         outputs.append(outputs_i)
     #         h_t = h_t[-1]
     #     return outputs
-
-    # def predict_step(self,batch, batch_idx, dataloader_idx=0):
-    #     xt,x0,xi,_,msk,dt,_,key = batch
-    #     msk = msk.bool()
-    #     output = self.forward(dt, (xt,x0,xi))
-    #     output = output[~msk.bool().repeat_interleave(1,1)]
-    #     key = key[~msk.bool()]
-    #     key = key.repeat_interleave(1,0)
-    #     return torch.cat((key.unsqueeze(1),output),1)
-

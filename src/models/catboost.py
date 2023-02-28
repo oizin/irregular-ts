@@ -26,7 +26,7 @@ def catboost_feature_engineer(df,features,n_shift=5):
     # time gap
     df.loc[:,'delta_t'] = df.loc[:,features['time_vars'][1]] - df.loc[:,features['time_vars'][0]]
     new_vars = ['delta_t']
-    # previous valueWs
+    # previous values
     for var in features['timevarying']:
         for n in range(1,n_shift+1):
             var_name = var + '_s' + str(n)

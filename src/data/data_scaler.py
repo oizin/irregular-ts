@@ -67,10 +67,10 @@ class PreProcessSim():
 #         df = df.copy()
 #         df.loc[:,self.outputs] = self.scaler_outputs.transform(df[self.outputs].copy(deep=True))
         # glucose
-        df = df.copy()
-        df.loc[:,'x'] = glc_transform(df['x'].to_numpy())
-        df = df.copy()
-        df.loc[:,'y'] = glc_transform(df['y'].to_numpy())
-        df.loc[:,'g'] = df.loc[:,'g'] / 2.0
-        df.loc[:,'m'] = df.loc[:,'m']
+        # df = df.copy()
+        # df.loc[:,'x'] = glc_transform(df['x'].to_numpy())
+        # df = df.copy()
+        # df.loc[:,'y'] = glc_transform(df['y'].to_numpy())
+        # df.loc[:,'g'] = df.loc[:,'g'] / 2.0
+        # df.loc[:,'m'] = df.loc[:,'m']
         return df

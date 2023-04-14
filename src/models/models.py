@@ -65,8 +65,8 @@ class ODEFunc(nn.Module):
                 nn.init.normal_(m.weight, mean=0, std=0.1)
                 nn.init.constant_(m.bias, val=0)
 
-    def forward(self,hidden):
-        output = self.layers(hidden)
+    def forward(self,hidden,input):
+        output = self.layers(torch.cat((hidden,input),1))
         return output
 
 class DecayFlow(nn.Module):
@@ -105,19 +105,19 @@ class Encoder(nn.Module):
         return output
 
 class ResNetFlow(nn.Module):
-    def __init__(self,input_size,hidden_size,n_power_iterations=1):
+    def __init__(self,input_size,hidden_size,output_size,n_power_iterations=1):
         super(ResNetFlow,self).__init__()
         self.n_power_iterations = n_power_iterations
         self.net = nn.Sequential(
                         spectral_norm(nn.Linear(input_size+1,hidden_size),n_power_iterations=self.n_power_iterations),
                         nn.Tanh(),
-                        spectral_norm(nn.Linear(hidden_size,input_size),n_power_iterations=self.n_power_iterations),
+                        spectral_norm(nn.Linear(hidden_size,output_size),n_power_iterations=self.n_power_iterations),
                         nn.Tanh()
         )
         self.time_func = nn.Tanh()
 
-    def forward(self,hidden,delta_t):
-        return hidden + self.time_func(delta_t)*self.net(torch.cat((hidden,delta_t),1))
+    def forward(self,hidden,delta_t,input_ode):
+        return hidden + self.time_func(delta_t)*self.net(torch.cat((hidden,delta_t,input_ode),1))
 
 
 # GRU flavours -------------------------------------------------------------------------------
@@ -125,8 +125,10 @@ class ResNetFlow(nn.Module):
 class ODEGRUModel(BaseModel):
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
-        func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
-        odenet = ct.NeuralODE(func,time_func=lambda x : x / 24.0,time_dependent=False,data_dependent=False,
+        func = ODEFunc(dims['hidden_dim_t']+dims['input_dim_i'],50,dims['hidden_dim_t'])
+        odenet = ct.NeuralODE(func,time_func=lambda x : x / 24.0,
+                              #delta_t_func='log',
+                              time_dependent=False,data_dependent=True,
                   backend='torchctrnn',solver='euler',solver_options={'step_size':0.01})
         odernn = ct.ODEGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
@@ -136,8 +138,8 @@ class ODEGRUModel(BaseModel):
 class FlowGRUModel(BaseModel):
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],12,dims['hidden_dim_t'])
-        func = ResNetFlow(dims['hidden_dim_t'],12)
-        odenet = ct.NeuralFlow(func)
+        func = ResNetFlow(dims['hidden_dim_t']+dims['input_dim_i'],50,dims['hidden_dim_t'])
+        odenet = ct.NeuralFlow(func,data_dependent=True)
         odernn = ct.FlowGRUCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
@@ -146,7 +148,7 @@ class FlowGRUModel(BaseModel):
 class GRUModel(BaseModelTimeGap):
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = None
-        rnn = nn.GRUCell(dims['input_size_update']+dims['input_dim_0']+dims['input_dim_i']+2,dims['hidden_dim_t'])
+        rnn = nn.GRUCell(dims['input_dim_t']+dims['input_dim_0']+dims['input_dim_i']+2,dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(rnn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
         self.save_hyperparameters({'model':'GRUModel'})
@@ -225,8 +227,10 @@ class ODELSTMModel(BaseModelLSTM):
 
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
-        func = ODEFunc(dims['hidden_dim_t'],50,dims['hidden_dim_t'])
-        odenet = ct.NeuralODE(func,time_func=lambda x : x / 24.0,time_dependent=False,data_dependent=False,
+        func = ODEFunc(dims['hidden_dim_t']+dims['input_dim_i'],50,dims['hidden_dim_t'])
+        odenet = ct.NeuralODE(func,time_func=lambda x : x / 24.0,
+                              #delta_t_func='log',
+                              time_dependent=False,data_dependent=True,
                   backend='torchctrnn',solver='euler',solver_options={'step_size':0.01})
         odernn = ct.ODELSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
@@ -237,8 +241,8 @@ class FlowLSTMModel(BaseModelLSTM):
 
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         encoder = Encoder(dims['input_size_update'],30,dims['hidden_dim_t'])
-        func = ResNetFlow(dims['hidden_dim_t'],50)
-        odenet = ct.NeuralFlow(func)
+        func = ResNetFlow(dims['hidden_dim_t']+dims['input_dim_i'],50,dims['hidden_dim_t'])
+        odenet = ct.NeuralFlow(func,data_dependent=True)
         odernn = ct.FlowLSTMCell(odenet,dims['hidden_dim_t'],dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(odernn,outNN,encoder,NN0,dims,ginv,eval_fn,**kwargs)
@@ -248,7 +252,7 @@ class LSTMModel(BaseModelTimeGap):
 
     def __init__(self,dims,outputNN,ginv,eval_fn,NN0=nn.Identity(),**kwargs):
         preNN=nn.Identity()
-        rnn = nn.LSTMCell(dims['input_size_update']+dims['input_dim_0']+dims['input_dim_i']+2,dims['hidden_dim_t'])
+        rnn = nn.LSTMCell(dims['input_dim_t']+dims['input_dim_0']+dims['input_dim_i']+2,dims['hidden_dim_t'])
         outNN = outputNN(dims['hidden_dim_t'])
         super().__init__(rnn,outNN,preNN,NN0,dims,ginv,eval_fn,**kwargs)
 

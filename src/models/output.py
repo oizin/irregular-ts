@@ -23,7 +23,7 @@ class GaussianOutputNNBase(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.Dropout(0.2),
             nn.Tanh(),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(hidden_dim, 1)
         )
     
     def forward(self,x):

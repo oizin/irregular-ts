@@ -51,8 +51,8 @@ parser.add_argument('--test', action='store_true')
 parser.add_argument('--no-test', dest='test', action='store_false')
 parser.set_defaults(test=True)
 parser.add_argument('--features', dest='features',default='features',type=str)
-parser.add_argument('--small_data', action='store_true')
-parser.add_argument('--no-small_data', dest='small_data', action='store_false')
+parser.add_argument('--small-data', action='store_true')
+parser.add_argument('--no-small-data', dest='small_data', action='store_false')
 parser.set_defaults(store_true=False)
 
 # which experiment are we running:
@@ -65,7 +65,7 @@ parser.add_argument('--task',dest='task',
 # which model to use:
 parser.add_argument('--model', dest='model',choices=list(models.keys()),type=str)
 parser.add_argument('--lr', dest='lr',default=0.01,type=float)
-parser.add_argument('--update_mixing', dest='update_mixing',default=0.001,type=float)
+parser.add_argument('--update-mixing', dest='update_mixing',default=0.001,type=float)
 parser.add_argument('--merror', dest='merror',default=1e-3,type=float)
 parser.add_argument('--niter', dest='niter',default=10000,type=int)
 
@@ -93,7 +93,7 @@ def g(x):
     return x
 
 ## logger ##
-logger = CSVLogger("experiments/mimic",name=args.logfolder)
+logger = CSVLogger("experiments/",name=args.logfolder)
 
 ## deep learning trainer ##
 def train_test_deeplearner(df_train,df_test,features,task='gaussian',test=True):
@@ -318,6 +318,7 @@ if __name__ == '__main__':
     df.reset_index(drop=True,inplace=True)
     if args.small_data:
         df = df.iloc[0:8000,]
+        print("using small dataset (for testing)")
     
     ## split data into train/test ##
     if args.nfolds == 1:

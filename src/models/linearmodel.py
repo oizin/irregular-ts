@@ -1,5 +1,6 @@
 ## Linear Model ##
 from sklearn.linear_model import LinearRegression
+from sklearn.impute import SimpleImputer
 import numpy as np
 
 class LinearModel():
@@ -9,18 +10,23 @@ class LinearModel():
         self.eval_fn = eval_fn
 
     def fit(self,X,y):
+        self.imp = SimpleImputer(missing_values=np.nan, strategy='constant',fill_value=0.0)
+        self.imp.fit(X)
         if self.task == 'gaussian':
             self.model_mu = LinearRegression()
             self.model_sd = LinearRegression()
+            X = self.imp.transform(X)
             self.model_mu.fit(X,y)
             y_pred = self.model_mu.predict(X)
             self.model_sd.fit(X,(y - y_pred)**2 + 1e-2)
         elif self.task == 'conditional_expectation':
+            X = self.imp.transform(X)
             self.model_mu = LinearRegression()
             self.model_mu.fit(X,y)
 
     def predict(self,X):
         if self.task == 'gaussian':
+            X = self.imp.transform(X)
             mu = self.model_mu.predict(X)
             sd = np.sqrt(self.model_sd.predict(X))
             mu = mu.reshape(mu.shape[0],1)
@@ -28,7 +34,7 @@ class LinearModel():
             out = np.concatenate((mu,sd),1)
             return(out)
         elif self.task == 'conditional_expectation':
-            mu = self.model_mu = LinearRegression()
+            mu = self.model_mu.predict(X)
             return(mu)
 
 def lm_feature_engineer(df,features,n_shift=5):

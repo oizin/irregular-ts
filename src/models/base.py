@@ -227,13 +227,13 @@ class BaseModelTimeGap(BaseModel):
             xt_i = xt[:,i,:]
             xi_i = xi[:,i,:]
             dt_i = dt[:,i,:]
-            xt_i = torch.cat((xt_i,xi_i,x0,dt_i),1)
+            x_i = torch.cat((xt_i,xi_i,x0,dt_i),1)
             # if (self.NN0 != None) & (self.preNN != None):
             #     xt_i = self.preNN(torch.cat((xt_i,z0),1))
             # elif (self.preNN != None):
             #     xt_i = self.preNN(xt_i)
             # 
-            h_t = self.RNN(xt_i,h_t).squeeze(0)
+            h_t = self.RNN(x_i,h_t).squeeze(0)
             h_t = F.dropout(h_t,training=training,p=p)
             output[:,i,:] = self.OutputNN(h_t)
         return output    

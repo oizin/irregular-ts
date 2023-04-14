@@ -1,53 +1,69 @@
-
 To do:
 
-* Rename train.py to mimic.py
-* mimic.py should do cross validation: folds, seed, save_predictions as arguments
-* simulated data should be created and saved in data: simulation_dataset.ipynb
-* put all experiments in experiments.sh
-* there should be poetry dependency set up
+0. rerun ode models
+1. accidentally version_2 of a training run in MIMIC
+2. Ensemble
 
-Performance:  
-* rerun
+# Forecasting with irregularly measured blood glucose with deep learning
 
-Code for the following:
+Repository for the paper:
 
-<graph>
+Continuous time recurrent neural networks : overview and application to forecasting blood glucose in the intensive care unit
 
-Demo run
+## Data setup
 
-A demo version of the data used, from the openly available, can be found in the folder XXX. This
-enables the user to see the final data structure and run the code in the . See below for more 
-details on repeating the full analysis. 
+### MIMIC-IV
 
-### Data setup
+As we are not data custodians we cannot publicaly share the MIMIC-IV data used. However, it is available to those with
+credentialed access to physionet.org. Credentialed access can be requested through your physionet account. 
 
-While we cannot publicaly share the full data used, it is available to those with
-credentialed access to physionet.org. Credentialed access can be requested at XXX and requires
-completion of XXX and an second academic reference who can xxx. 
+We used dbt to connect to the Google Bigquery MIMIC-IV database that can be autopopulated
+through the physionet interface. 
 
-A demo version of the data used, from the openly available, can be found in the folder XXX. This
-enables the user to see the final data structure and run the code in the 
+https://docs.getdbt.com/reference/warehouse-setups/bigquery-setup
 
-See dbt project at github.com/mimic
+After setting up dbt run: 
 
-The final output of that project is downloaded via analysis_dataset.ipynb
+```
+cd scripts/data/mimic4glucose
+dbt run
+```
 
-### Installing torchctrnn
+Then run the notebook: `scripts/data/setup_mimic_data.ipynb`
+
+### Simulations
+
+After installing torchctrnn run the notebook: `scripts/data/setup_simulations.ipynb`
+
+### Notable dependencies
     
-Install from Github as follows:
-        
-pip install https://github.com/oizin/torchctrnn/tarball/main
-
-NOTE: add an irregular-ts branch to torchctrnn!
+- python 3.9+
+- dbt
+- db-dtype
+- pytorch
+- torchctrnn: pip install https://github.com/oizin/torchctrnn/tarball/main
+- numba
+- properscoring
     
-### Using the code
-
-conda create --clone base --name irregular
-conda activate irregular
-
-The files mimic.py and simulation.py
+## Repeating the experiments
     
-python train.py --hidden_dim_t=12 --net=ctRNNModel --max_epochs=100 --update_loss=0.1 --logfolder=model_results_19112021 --test=True --nfolds=1 --seed 1
+The full analysis is reproducible as follows:
 
+1) Run the bash scripts:
+
+```
+./run_simulation_experiments.sh
+./run_mimic_experiments.sh
+```
+
+2) Run the evaluation notebooks
+
+- scripts/eval/simulation_data_size.ipynb (figure XA)
+- scripts/eval/simulation_all_5000.ipynb (figure XB)
+- scripts/eval/xxxxx.ipynb (xxxx)
+    
+The following is an example of running a single experiment
+```
+python train.py --model=LinearModel --logfolder=results --test --nfolds=1 --seed 1 --data mimic
+```
 

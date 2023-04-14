@@ -1,9 +1,3 @@
-To do:
-
-0. rerun ode models
-1. accidentally version_2 of a training run in MIMIC
-2. Ensemble
-
 # Forecasting with irregularly measured blood glucose with deep learning
 
 Repository for the paper:
@@ -58,9 +52,9 @@ The full analysis is reproducible as follows:
 
 2) Run the evaluation notebooks
 
-- scripts/eval/simulation_data_size.ipynb (figure XA)
-- scripts/eval/simulation_all_5000.ipynb (figure XB)
-- scripts/eval/xxxxx.ipynb (xxxx)
+- scripts/results/simulation_data_size.ipynb
+- scripts/results/simulation_all_5000.ipynb 
+- scripts/results/mimic_results_from_predictions.ipynb
     
 The following is an example of running a single experiment
 ```
